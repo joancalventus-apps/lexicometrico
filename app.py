@@ -16,7 +16,6 @@ from sklearn.cluster import KMeans
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
-# Estilos CSS para limpieza y fuentes
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
@@ -57,15 +56,20 @@ def clean_text(text, language='Español', custom_stops=[], min_len=2):
 st.title("📊 Lexicométrico")
 
 # --- BARRA LATERAL ---
-st.sidebar.header("1. Datos y Filtros")
+st.sidebar.header("1. Carga de Datos")
 uploaded_file = st.sidebar.file_uploader("Arrastrar y soltar archivo CSV aquí", type=["csv"])
 lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("2. Limpieza")
+st.sidebar.header("2. Filtros y Limpieza")
+
+# 1. Frecuencia Mínima (PRIMERO, COMO PEDISTE)
+min_freq_filter = st.sidebar.slider("Seleccione Frecuencia mínima de aparición:", 1, 50, 2)
+
+# 2. Exclusión de palabras (LUEGO)
 custom_stopwords_input = st.sidebar.text_area("Excluir palabras (separar por coma):", placeholder="ej: respuesta, ns, nc")
 custom_stopwords_list = [x.strip().lower() for x in custom_stopwords_input.split(',')] if custom_stopwords_input else []
-min_freq_filter = st.sidebar.slider("Frecuencia mínima de aparición:", 1, 50, 2)
+
 
 if uploaded_file is not None:
     try:
@@ -88,20 +92,19 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales.")
         else:
-            # --- CÁLCULOS ---
+            # --- CÁLCULOS GENERALES ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # --- SELECCIÓN POR DEFECTO ---
-            # Si es el inicio, seleccionamos la palabra #1
+            # Default Selection KWIC
             available_words = set(df_freq['Término'])
             if st.session_state['selected_word'] is None or st.session_state['selected_word'] not in available_words:
                 if not df_freq.empty:
                     st.session_state['selected_word'] = df_freq.iloc[0]['Término']
 
-            # --- CLUSTERING SEMÁNTICO ---
+            # Clustering Semántico
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -114,24 +117,22 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # --- COLORES ---
+            # Colores
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
-            # Diccionario palabra -> color (para la Nube)
             word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
 
-            # Función para colorear la nube (Match exacto con barras)
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS ---
-            tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
+            # --- PESTAÑAS (Estructura Actualizada) ---
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de Calor", "🕸️ Redes", "❤️ Sentimientos"])
 
+            # --- PESTAÑA 1: FRECUENCIA & KWIC ---
             with tab1:
-                col_left, col_right = st.columns([1.2, 0.8]) # Dar un poco más de espacio a la barra
+                col_left, col_right = st.columns([1.2, 0.8])
                 
-                # --- A. BARRAS INTERACTIVAS ---
                 with col_left:
                     st.subheader("Glosario de términos más utilizados")
                     st.markdown("**Haz clic en una barra para mostrar el contexto:**")
@@ -140,7 +141,6 @@ if uploaded_file is not None:
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
                         color='Grupo', text='Frecuencia', color_discrete_map=group_color_map
                     )
-                    
                     fig_bar.update_layout(
                         yaxis=dict(categoryorder='total ascending', tickfont=dict(size=16, color='black', family="Arial Black")),
                         xaxis=dict(showticklabels=False),
@@ -148,42 +148,32 @@ if uploaded_file is not None:
                     )
                     fig_bar.update_traces(textposition='outside', textfont_size=18, cliponaxis=False, width=0.7)
                     
-                    # Interacción robusta
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
                     if event_bar and event_bar['selection']['points']:
                         new_word = event_bar['selection']['points'][0]['y']
                         st.session_state['selected_word'] = new_word
 
-                # --- B. NUBE VISUAL (Formato Script 1 - Perfecto) ---
                 with col_right:
                     st.subheader("Nube Semántica")
-                    st.markdown("*(Representación visual de campos semánticos)*")
-                    
-                    # Recuperamos el formato original de WordCloud (Matplotlib)
+                    st.markdown("*(Visualización estética estática)*")
                     wc = WordCloud(
-                        width=600, height=800, 
-                        background_color='white', 
-                        max_words=top_n,
-                        color_func=color_func, # Aplicar mismos colores
-                        prefer_horizontal=0.9,
-                        relative_scaling=0.5
+                        width=600, height=800, background_color='white', 
+                        max_words=top_n, color_func=color_func, 
+                        prefer_horizontal=0.9, relative_scaling=0.5
                     ).generate_from_frequencies(dict(common_words))
                     
                     fig_wc, ax = plt.subplots(figsize=(6,8))
-                    ax.imshow(wc, interpolation='bilinear')
-                    ax.axis('off')
-                    st.pyplot(fig_wc) # Renderizado estático de alta calidad
+                    ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
+                    st.pyplot(fig_wc)
 
-                # --- C. SECCIÓN KWIC ---
+                # KWIC
                 st.markdown("---")
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 
-                # Buscador manual opcional por si quieren buscar algo de la nube sin clicar la barra
                 col_search, col_info = st.columns([1, 3])
                 with col_search:
                      manual_search = st.text_input("🔍 O escribe una palabra aquí:", value="")
                 
-                # Lógica de prioridad: Si escriben, usa eso. Si no, usa el clic/default.
                 current_word = manual_search if manual_search else st.session_state['selected_word']
 
                 st.markdown(f"""
@@ -197,16 +187,48 @@ if uploaded_file is not None:
                 if current_word:
                     mask = df['str_processed'].str.contains(current_word, case=False, na=False)
                     resul = df[mask]
-                    
                     if len(resul) > 0:
                         st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
                     else:
-                        st.warning(f"No se encontraron coincidencias exactas para '{current_word}' con los filtros actuales.")
-
+                        st.warning(f"No se encontraron coincidencias para '{current_word}'.")
                 st.markdown("<br><br>", unsafe_allow_html=True)
 
-            # --- PESTAÑA 2: REDES ---
+            # --- PESTAÑA 2: MAPA DE CALOR (NUEVA) ---
             with tab2:
+                st.subheader("Distribución de Palabras por Categoría")
+                st.markdown("Este mapa muestra qué palabras son más utilizadas por cada grupo (Variable Categórica).")
+
+                # Selección de variable para el cruce
+                cat_heatmap = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
+                
+                # Preparar datos para Heatmap
+                # 1. Expandir el dataframe para tener una fila por cada palabra tokenizada
+                df_exploded = df.explode('tokens')
+                
+                # 2. Filtrar solo las Top N palabras para que el mapa sea legible
+                top_words_list = df_freq['Término'].head(20).tolist() # Top 20 palabras
+                df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
+                
+                # 3. Crear tabla cruzada (Crosstab)
+                if not df_heatmap_filtered.empty:
+                    heatmap_matrix = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
+                    
+                    # 4. Graficar
+                    fig_heat = px.imshow(
+                        heatmap_matrix,
+                        text_auto=True, # Mostrar números
+                        aspect="auto",  # Ajustar al ancho
+                        color_continuous_scale='Viridis',
+                        labels=dict(x="Palabras Más Frecuentes", y=cat_heatmap, color="Frecuencia"),
+                        title=f"Frecuencia de términos top según {cat_heatmap}"
+                    )
+                    fig_heat.update_xaxes(side="top") # Poner palabras arriba para leer mejor
+                    st.plotly_chart(fig_heat, use_container_width=True)
+                else:
+                    st.warning("No hay suficientes datos cruzados para generar el mapa.")
+
+            # --- PESTAÑA 3: REDES ---
+            with tab3:
                 st.subheader("Red de Co-ocurrencia")
                 lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
                 vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code_net))
@@ -226,20 +248,18 @@ if uploaded_file is not None:
                     nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1500, font_size=10, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
-                    st.warning(f"Se necesitan más datos para generar la red: {e}")
-                st.markdown("<br><br>", unsafe_allow_html=True)
+                    st.warning(f"Se necesitan más datos: {e}")
 
-            # --- PESTAÑA 3: SENTIMIENTOS ---
-            with tab3:
+            # --- PESTAÑA 4: SENTIMIENTOS ---
+            with tab4:
                 c1, c2 = st.columns(2)
                 with c1:
                     fig_h = px.histogram(df, x='polaridad', nbins=20, title="Distribución de Polaridad", color_discrete_sequence=['teal'])
                     st.plotly_chart(fig_h, use_container_width=True)
                 with c2:
-                    cat_sel = st.selectbox("Cruzar con variable:", cat_cols)
+                    cat_sel = st.selectbox("Cruzar con variable:", cat_cols, key='sent_cat')
                     fig_b = px.box(df, x=cat_sel, y='polaridad', color=cat_sel, title="Polaridad por Categoría")
                     st.plotly_chart(fig_b, use_container_width=True)
-                st.markdown("<br><br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
