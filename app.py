@@ -12,6 +12,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
+from scipy.stats import chi2_contingency # Nueva librería para estadística inferencial
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
@@ -63,10 +64,10 @@ lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
 st.sidebar.markdown("---")
 st.sidebar.header("2. Filtros y Limpieza")
 
-# 1. Frecuencia Mínima (PRIMERO, COMO PEDISTE)
+# 1. Frecuencia Mínima
 min_freq_filter = st.sidebar.slider("Seleccione Frecuencia mínima de aparición:", 1, 50, 2)
 
-# 2. Exclusión de palabras (LUEGO)
+# 2. Exclusión de palabras
 custom_stopwords_input = st.sidebar.text_area("Excluir palabras (separar por coma):", placeholder="ej: respuesta, ns, nc")
 custom_stopwords_list = [x.strip().lower() for x in custom_stopwords_input.split(',')] if custom_stopwords_input else []
 
@@ -117,7 +118,7 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # Colores
+            # Colores para gráficos de barras
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
@@ -126,8 +127,8 @@ if uploaded_file is not None:
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS (Estructura Actualizada) ---
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de Calor", "🕸️ Redes", "❤️ Sentimientos"])
+            # --- PESTAÑAS ---
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de Calor (Significatividad)", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- PESTAÑA 1: FRECUENCIA & KWIC ---
             with tab1:
@@ -155,15 +156,23 @@ if uploaded_file is not None:
 
                 with col_right:
                     st.subheader("Nube Semántica")
-                    st.markdown("*(Visualización estética estática)*")
+                    # NUBE DE PALABRAS COMPRIMIDA
                     wc = WordCloud(
-                        width=600, height=800, background_color='white', 
-                        max_words=top_n, color_func=color_func, 
-                        prefer_horizontal=0.9, relative_scaling=0.5
+                        width=500, height=500, # Formato cuadrado ayuda a comprimir
+                        background_color='white', 
+                        max_words=top_n, 
+                        color_func=color_func, 
+                        prefer_horizontal=1.0, 
+                        relative_scaling=0, # Fuerza a que el tamaño dependa menos de freq relativa y más del rank, ayuda a empaquetar
+                        margin=0, # Sin margenes entre palabras
+                        min_font_size=8
                     ).generate_from_frequencies(dict(common_words))
                     
-                    fig_wc, ax = plt.subplots(figsize=(6,8))
-                    ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
+                    fig_wc, ax = plt.subplots(figsize=(6,6))
+                    ax.imshow(wc, interpolation='bilinear')
+                    ax.axis('off') # Eliminar ejes
+                    # Ajuste fino para quitar bordes blancos del plot
+                    plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, hspace = 0, wspace = 0)
                     st.pyplot(fig_wc)
 
                 # KWIC
@@ -193,36 +202,76 @@ if uploaded_file is not None:
                         st.warning(f"No se encontraron coincidencias para '{current_word}'.")
                 st.markdown("<br><br>", unsafe_allow_html=True)
 
-            # --- PESTAÑA 2: MAPA DE CALOR (NUEVA) ---
+            # --- PESTAÑA 2: MAPA DE CALOR ESTADÍSTICO ---
             with tab2:
-                st.subheader("Distribución de Palabras por Categoría")
-                st.markdown("Este mapa muestra qué palabras son más utilizadas por cada grupo (Variable Categórica).")
+                st.subheader("Análisis de Especificidades (Chi-Cuadrado)")
+                st.info("Muestra qué palabras son estadísticamente significativas para cada grupo.")
+                
+                # Explicación breve de la estadística
+                with st.expander("¿Cómo interpretar los valores?"):
+                    st.markdown("""
+                    Cada celda muestra:
+                    1. **Frecuencia (número grande):** Cantidad de veces que aparece la palabra.
+                    2. **R (Residuo Estandarizado):** Valor estadístico de relevancia.
+                       - **R > 1.96 (*):** La palabra se usa **significativamente más** de lo esperado (Sobre-representada).
+                       - **R < -1.96:** La palabra se usa menos de lo esperado.
+                       - **Cerca de 0:** Uso normal/promedio.
+                    """)
 
-                # Selección de variable para el cruce
                 cat_heatmap = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
                 
-                # Preparar datos para Heatmap
-                # 1. Expandir el dataframe para tener una fila por cada palabra tokenizada
+                # 1. Preparar Matriz
                 df_exploded = df.explode('tokens')
-                
-                # 2. Filtrar solo las Top N palabras para que el mapa sea legible
-                top_words_list = df_freq['Término'].head(20).tolist() # Top 20 palabras
+                top_words_list = df_freq['Término'].head(20).tolist()
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
                 
-                # 3. Crear tabla cruzada (Crosstab)
                 if not df_heatmap_filtered.empty:
-                    heatmap_matrix = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
+                    # Tabla de contingencia (Observados)
+                    observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # 4. Graficar
+                    # 2. Cálculo Estadístico (Chi2)
+                    chi2, p, dof, expected = chi2_contingency(observed)
+                    
+                    # 3. Cálculo de Residuos Estandarizados: (Obs - Exp) / sqrt(Exp)
+                    # Esto nos da la "fuerza" de la atracción entre categoría y palabra
+                    residuals = (observed - expected) / np.sqrt(expected)
+                    
+                    # 4. Construir Matriz de Texto para mostrar Frecuencia + Residuo
+                    text_matrix = observed.copy().astype(object)
+                    for i in range(len(observed)):
+                        for j in range(len(observed.columns)):
+                            obs_val = observed.iloc[i, j]
+                            res_val = residuals.iloc[i, j]
+                            # Añadir asterisco si es significativo (p < 0.05 aprox)
+                            sig = "(*)" if abs(res_val) > 1.96 else ""
+                            # Formato HTML-like para Plotly
+                            text_matrix.iloc[i, j] = f"{obs_val}<br><span style='font-size:0.8em'>R:{res_val:.1f}{sig}</span>"
+
+                    # 5. Colores personalizados: Amarillo -> Naranja -> Rojo -> Granate
+                    custom_colors = [
+                        [0.0, "#FFFFCC"], # Amarillo muy claro
+                        [0.2, "#FED976"], 
+                        [0.4, "#FD8D3C"],
+                        [0.6, "#E31A1C"],
+                        [0.8, "#800026"], # Granate
+                        [1.0, "#4A0012"]  # Granate casi negro
+                    ]
+
+                    # 6. Graficar
                     fig_heat = px.imshow(
-                        heatmap_matrix,
-                        text_auto=True, # Mostrar números
-                        aspect="auto",  # Ajustar al ancho
-                        color_continuous_scale='Viridis',
-                        labels=dict(x="Palabras Más Frecuentes", y=cat_heatmap, color="Frecuencia"),
-                        title=f"Frecuencia de términos top según {cat_heatmap}"
+                        observed,
+                        text_auto=False, # Desactivamos auto para usar nuestra matriz personalizada
+                        aspect="auto",
+                        color_continuous_scale=custom_colors,
+                        labels=dict(x="Palabras Top", y=cat_heatmap, color="Frecuencia"),
+                        title=f"Especificidades: {cat_heatmap} vs Vocabulario"
                     )
-                    fig_heat.update_xaxes(side="top") # Poner palabras arriba para leer mejor
+                    
+                    # Inyectar el texto personalizado (Freq + Residuo)
+                    fig_heat.update_traces(text=text_matrix, texttemplate="%{text}")
+                    fig_heat.update_xaxes(side="top")
+                    fig_heat.update_layout(height=600)
+                    
                     st.plotly_chart(fig_heat, use_container_width=True)
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
