@@ -12,7 +12,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
-from scipy.stats import chi2_contingency # Nueva librería para estadística inferencial
+from scipy.stats import chi2_contingency, norm # norm para calcular p-values
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
@@ -128,7 +128,7 @@ if uploaded_file is not None:
                 return word_color_map.get(word, '#888888')
 
             # --- PESTAÑAS ---
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de Calor (Significatividad)", "🕸️ Redes", "❤️ Sentimientos"])
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- PESTAÑA 1: FRECUENCIA & KWIC ---
             with tab1:
@@ -156,22 +156,21 @@ if uploaded_file is not None:
 
                 with col_right:
                     st.subheader("Nube Semántica")
-                    # NUBE DE PALABRAS COMPRIMIDA
+                    # Visualización estética
                     wc = WordCloud(
-                        width=500, height=500, # Formato cuadrado ayuda a comprimir
+                        width=500, height=500, 
                         background_color='white', 
                         max_words=top_n, 
                         color_func=color_func, 
                         prefer_horizontal=1.0, 
-                        relative_scaling=0, # Fuerza a que el tamaño dependa menos de freq relativa y más del rank, ayuda a empaquetar
-                        margin=0, # Sin margenes entre palabras
+                        relative_scaling=0, 
+                        margin=0, 
                         min_font_size=8
                     ).generate_from_frequencies(dict(common_words))
                     
                     fig_wc, ax = plt.subplots(figsize=(6,6))
                     ax.imshow(wc, interpolation='bilinear')
-                    ax.axis('off') # Eliminar ejes
-                    # Ajuste fino para quitar bordes blancos del plot
+                    ax.axis('off') 
                     plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, hspace = 0, wspace = 0)
                     st.pyplot(fig_wc)
 
@@ -204,21 +203,20 @@ if uploaded_file is not None:
 
             # --- PESTAÑA 2: MAPA DE CALOR ESTADÍSTICO ---
             with tab2:
-                st.subheader("Análisis de Especificidades (Chi-Cuadrado)")
-                st.info("Muestra qué palabras son estadísticamente significativas para cada grupo.")
-                
-                # Explicación breve de la estadística
-                with st.expander("¿Cómo interpretar los valores?"):
-                    st.markdown("""
-                    Cada celda muestra:
-                    1. **Frecuencia (número grande):** Cantidad de veces que aparece la palabra.
-                    2. **R (Residuo Estandarizado):** Valor estadístico de relevancia.
-                       - **R > 1.96 (*):** La palabra se usa **significativamente más** de lo esperado (Sobre-representada).
-                       - **R < -1.96:** La palabra se usa menos de lo esperado.
-                       - **Cerca de 0:** Uso normal/promedio.
-                    """)
-
+                # Renombramos el título como pediste
                 cat_heatmap = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
+                
+                st.markdown(f"### {cat_heatmap} vs Vocabulario")
+                
+                # Explicación breve de la estadística (Manteniendo la ayuda)
+                with st.expander("¿Cómo interpretar los valores del mapa de calor?"):
+                    st.markdown("""
+                    Esta tabla muestra qué tan relevante es una palabra para cada grupo.
+                    1. **Número Grande (Frecuencia):** Cuántas veces aparece la palabra en este grupo.
+                    2. **Valor-p (Probabilidad):** Indica si esta frecuencia es "normal" o "extraordinaria".
+                       - **p < 0.050:** Es estadísticamente significativo. El uso de la palabra no es casualidad.
+                       - **p > 0.050:** Es un uso normal, dentro del promedio.
+                    """)
                 
                 # 1. Preparar Matriz
                 df_exploded = df.explode('tokens')
@@ -229,48 +227,65 @@ if uploaded_file is not None:
                     # Tabla de contingencia (Observados)
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # 2. Cálculo Estadístico (Chi2)
-                    chi2, p, dof, expected = chi2_contingency(observed)
+                    # 2. Cálculo Estadístico (Chi2 y Residuos)
+                    chi2, p_global, dof, expected = chi2_contingency(observed)
                     
-                    # 3. Cálculo de Residuos Estandarizados: (Obs - Exp) / sqrt(Exp)
-                    # Esto nos da la "fuerza" de la atracción entre categoría y palabra
+                    # Residuos Estandarizados (Z-scores)
                     residuals = (observed - expected) / np.sqrt(expected)
                     
-                    # 4. Construir Matriz de Texto para mostrar Frecuencia + Residuo
+                    # 3. Conversión Z-score a P-value (Two-tailed)
+                    # p = 2 * (1 - cdf(|Z|))
+                    p_values_matrix = 2 * (1 - norm.cdf(abs(residuals)))
+                    
+                    # 4. Construir Matriz de Texto con formato HTML
                     text_matrix = observed.copy().astype(object)
                     for i in range(len(observed)):
                         for j in range(len(observed.columns)):
                             obs_val = observed.iloc[i, j]
-                            res_val = residuals.iloc[i, j]
-                            # Añadir asterisco si es significativo (p < 0.05 aprox)
-                            sig = "(*)" if abs(res_val) > 1.96 else ""
-                            # Formato HTML-like para Plotly
-                            text_matrix.iloc[i, j] = f"{obs_val}<br><span style='font-size:0.8em'>R:{res_val:.1f}{sig}</span>"
+                            p_val = p_values_matrix.iloc[i, j]
+                            
+                            # Marcador visual de significancia
+                            sig_style = "font-weight:bold; color:black;" if p_val < 0.05 else "color:#444;"
+                            
+                            # Formato solicitado: Frecuencia grande y p con 3 decimales
+                            text_matrix.iloc[i, j] = (
+                                f"<span style='font-size:1.4em; font-weight:bold'>{obs_val}</span><br>"
+                                f"<span style='font-size:1.1em; {sig_style}'>p: {p_val:.3f}</span>"
+                            )
 
-                    # 5. Colores personalizados: Amarillo -> Naranja -> Rojo -> Granate
+                    # 5. Colores personalizados (Amarillo -> Naranja -> Rojo -> Granate)
                     custom_colors = [
-                        [0.0, "#FFFFCC"], # Amarillo muy claro
+                        [0.0, "#FFFFCC"], # Amarillo
                         [0.2, "#FED976"], 
                         [0.4, "#FD8D3C"],
                         [0.6, "#E31A1C"],
                         [0.8, "#800026"], # Granate
-                        [1.0, "#4A0012"]  # Granate casi negro
+                        [1.0, "#4A0012"]  # Granate oscuro
                     ]
 
-                    # 6. Graficar
+                    # 6. Graficar Heatmap
                     fig_heat = px.imshow(
                         observed,
-                        text_auto=False, # Desactivamos auto para usar nuestra matriz personalizada
+                        text_auto=False,
                         aspect="auto",
                         color_continuous_scale=custom_colors,
-                        labels=dict(x="Palabras Top", y=cat_heatmap, color="Frecuencia"),
-                        title=f"Especificidades: {cat_heatmap} vs Vocabulario"
+                        labels=dict(x="", y="", color="Frecuencia")
                     )
                     
-                    # Inyectar el texto personalizado (Freq + Residuo)
-                    fig_heat.update_traces(text=text_matrix, texttemplate="%{text}")
-                    fig_heat.update_xaxes(side="top")
-                    fig_heat.update_layout(height=600)
+                    # Inyectar texto formateado
+                    fig_heat.update_traces(
+                        text=text_matrix, 
+                        texttemplate="%{text}",
+                        hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
+                    )
+                    
+                    # 7. AUMENTO DE TAMAÑOS DE FUENTE (Solicitud explícita)
+                    fig_heat.update_layout(
+                        height=650,
+                        font=dict(size=14), # Fuente base
+                    )
+                    fig_heat.update_xaxes(side="top", tickfont=dict(size=16, family="Arial Black")) # Eje X (Palabras)
+                    fig_heat.update_yaxes(tickfont=dict(size=16, family="Arial Black")) # Eje Y (Categorías)
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
                 else:
