@@ -22,7 +22,7 @@ st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
     
-    /* TAMAÑO ETIQUETAS PESTAÑAS */
+    /* ETIQUETAS PESTAÑAS */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
         font-size: 1.3rem;
         font-weight: 600;
@@ -65,6 +65,34 @@ def get_significance_stars(p_value):
     if p_value < 0.01:  return "**"
     if p_value < 0.05:  return "*"
     return "NS"
+
+# Algoritmo simplificado de MTLD (Measure of Textual Lexical Diversity)
+def calculate_mtld(tokens, threshold=0.72):
+    def count_factors(token_list):
+        factors = 0
+        ttr = 1.0
+        word_set = set()
+        length = 0
+        for word in token_list:
+            length += 1
+            word_set.add(word)
+            ttr = len(word_set) / length
+            if ttr < threshold:
+                factors += 1
+                length = 0
+                word_set = set()
+                ttr = 1.0
+        # Ajuste para el remanente (Interpolación)
+        if length > 0:
+            factors += (1 - ttr) / (1 - threshold)
+        return factors
+
+    if not tokens: return 0
+    # Promedio bidireccional (Forward + Backward)
+    f_forward = count_factors(tokens)
+    f_backward = count_factors(tokens[::-1])
+    factor_avg = (f_forward + f_backward) / 2
+    return len(tokens) / factor_avg if factor_avg > 0 else 0
 
 # --- 5. INTERFAZ PRINCIPAL ---
 
@@ -134,8 +162,8 @@ if uploaded_file is not None:
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS ---
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud (Jaccard)", "🕸️ Redes", "❤️ Sentimientos"])
+            # --- PESTAÑAS ACTUALIZADAS ---
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud entre vocabularios", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- 1. FRECUENCIA ---
             with tab1:
@@ -203,10 +231,8 @@ if uploaded_file is not None:
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
                 
                 if not df_heatmap_filtered.empty:
-                    # Observados
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # Colores
                     custom_colors = [
                         [0.0, "#FFFFCC"], [0.2, "#FED976"], 
                         [0.4, "#FD8D3C"], [0.6, "#E31A1C"],
@@ -215,30 +241,17 @@ if uploaded_file is not None:
 
                     # 1. VISUAL
                     st.subheader("1. Representación Visual")
-                    
-                    # Aseguramos que 'y' sea la variable seleccionada explícitamente
                     fig_heat = px.imshow(
                         observed,
                         text_auto=False,
                         aspect="auto",
                         color_continuous_scale=custom_colors,
-                        labels=dict(x="", y=cat_heatmap, color="Frecuencia") # <--- ETIQUETA EJE Y CORRECTA
+                        labels=dict(x="", y=cat_heatmap, color="Frecuencia")
                     )
                     
-                    fig_heat.update_layout(
-                        height=500,
-                        # Asegurar que el título del eje Y sea visible
-                        yaxis_title=cat_heatmap 
-                    )
-                    
+                    fig_heat.update_layout(height=500, yaxis_title=cat_heatmap)
                     fig_heat.update_xaxes(side="top", tickfont=dict(size=14))
-                    # Forzar que solo aparezcan las categorías (sin números intermedios)
-                    fig_heat.update_yaxes(
-                        tickfont=dict(size=14),
-                        tickmode='linear', 
-                        dtick=1
-                    )
-                    
+                    fig_heat.update_yaxes(tickfont=dict(size=14), tickmode='linear', dtick=1)
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
                     # 2. TABLA
@@ -267,10 +280,12 @@ if uploaded_file is not None:
                     df_stats = pd.DataFrame(stats_data)
                     st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
                     
+                    # CORRECCIÓN SOLICITADA: Tabla concentrada, NO usa todo el ancho
                     st.dataframe(
                         df_stats, 
-                        use_container_width=True,
+                        use_container_width=False, # <-- CAMBIO CLAVE: NO OCUPA TODO EL ANCHO
                         height=400,
+                        width=800, # Anchura fija óptima
                         column_config={
                             "Categoría": st.column_config.TextColumn("Categoría", width="small"),
                             "Término": st.column_config.TextColumn("Término", width="medium"),
@@ -283,14 +298,16 @@ if uploaded_file is not None:
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- 3. JACCARD ---
+            # --- 3. SIMILITUD ENTRE VOCABULARIOS ---
             with tab3:
-                st.subheader("Análisis de Similitud de Vocabulario (Jaccard)")
-                st.markdown("Comparación de vocabulario compartido entre grupos (1.0 = Idéntico).")
+                # Selector de variable para TODA la pestaña
+                cat_vocab = st.selectbox("Comparar grupos de la variable:", cat_cols, key='vocab_cat')
                 
-                cat_jaccard = st.selectbox("Comparar grupos de la variable:", cat_cols, key='jaccard_cat')
+                # --- PARTE A: JACCARD ---
+                st.subheader("1. Matriz de Similitud (Jaccard)")
+                st.markdown("Mide qué tanto se parece el vocabulario entre grupos (0.0 = Nada, 1.0 = Idéntico).")
                 
-                df_grouped = df.groupby(cat_jaccard)['tokens'].apply(list)
+                df_grouped = df.groupby(cat_vocab)['tokens'].apply(list)
                 
                 group_vocab = {}
                 for cat, list_of_lists in df_grouped.items():
@@ -314,23 +331,74 @@ if uploaded_file is not None:
                 
                 fig_j = px.imshow(
                     jaccard_matrix,
-                    x=groups,
-                    y=groups,
-                    text_auto='.2f',
-                    color_continuous_scale='Blues',
+                    x=groups, y=groups,
+                    text_auto='.2f', color_continuous_scale='Blues',
                     range_color=[0, 1],
-                    title=f"Matriz de Similitud: {cat_jaccard}"
+                    title=f"Similitud Jaccard: {cat_vocab}"
                 )
                 
                 fig_j.update_layout(
-                    height=600,
-                    xaxis = dict(tickmode='linear', dtick=1, side="top"),
-                    yaxis = dict(tickmode='linear', dtick=1)
+                    height=500,
+                    xaxis=dict(tickmode='linear', dtick=1, side="top"),
+                    yaxis=dict(tickmode='linear', dtick=1)
                 )
                 fig_j.update_xaxes(tickfont=dict(size=14))
                 fig_j.update_yaxes(tickfont=dict(size=14))
                 
                 st.plotly_chart(fig_j, use_container_width=True)
+
+                # --- PARTE B: DIVERSIDAD LÉXICA ---
+                st.markdown("---")
+                st.subheader("2. Métricas de Diversidad Léxica")
+                st.markdown("""
+                Comparación de la riqueza del vocabulario por categoría.
+                - **TTR (Type-Token Ratio):** Riqueza básica (Palabras únicas / Total). *Sensible a longitud.*
+                - **Raíz de Guiraud:** (Palabras únicas / √Total). *Más robusta.*
+                - **MTLD:** (Measure of Textual Lexical Diversity). *La medida más sofisticada y estable.*
+                """)
+                
+                diversity_data = []
+                for cat, list_of_lists in df_grouped.items():
+                    # Unir todos los tokens de la categoría en una sola lista larga
+                    flat_tokens = [item for sublist in list_of_lists for item in sublist]
+                    
+                    n_tokens = len(flat_tokens)
+                    n_types = len(set(flat_tokens))
+                    
+                    # Cálculo Métricas
+                    ttr = n_types / n_tokens if n_tokens > 0 else 0
+                    guiraud = n_types / np.sqrt(n_tokens) if n_tokens > 0 else 0
+                    mtld_val = calculate_mtld(flat_tokens)
+                    
+                    diversity_data.append({
+                        "Categoría": cat,
+                        "Total Palabras (N)": n_tokens,
+                        "Vocabulario Único (V)": n_types,
+                        "TTR": round(ttr, 3),
+                        "Guiraud": round(guiraud, 2),
+                        "MTLD": round(mtld_val, 2)
+                    })
+                
+                df_diversity = pd.DataFrame(diversity_data)
+                
+                # Visualización Gráfica Diversidad
+                col_d1, col_d2 = st.columns([1, 1])
+                
+                with col_d1:
+                    # Tabla
+                    st.dataframe(df_diversity, use_container_width=True, hide_index=True)
+                
+                with col_d2:
+                    # Gráfico comparativo (MTLD es el mejor para comparar)
+                    fig_div = px.bar(
+                        df_diversity, 
+                        x='Categoría', 
+                        y=['MTLD', 'Guiraud'], 
+                        barmode='group',
+                        title="Comparación de Riqueza (MTLD y Guiraud)",
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    st.plotly_chart(fig_div, use_container_width=True)
 
             # --- 4. REDES ---
             with tab4:
