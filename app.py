@@ -215,7 +215,7 @@ if uploaded_file is not None:
                     residuals = (observed - expected) / np.sqrt(expected)
                     p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
                     
-                    # Construcción Matriz Texto (IMPORTANTE: Inicializar vacío)
+                    # Construcción Matriz Texto
                     text_matrix = pd.DataFrame(index=observed.index, columns=observed.columns)
                     
                     for i in range(len(observed)):
@@ -223,12 +223,12 @@ if uploaded_file is not None:
                             obs_val = observed.iloc[i, j]
                             p_val = p_values_matrix[i, j]
                             
-                            # ESTILOS GIGANTES
-                            color_style = "color:black; font-weight:900" if p_val < 0.05 else "color:#555"
+                            # ESTILOS MASIVOS
+                            color_style = "color:black; font-weight:900" if p_val < 0.05 else "color:#444"
                             
                             text_matrix.iloc[i, j] = (
-                                f"<span style='font-size:2.2em; font-weight:900'>{obs_val}</span><br>" # Frecuencia Gigante
-                                f"<span style='font-size:1.6em; {color_style}'>p={p_val:.3f}</span>" # P-valor Grande
+                                f"<span style='font-size:3.0em; font-weight:900'>{obs_val}</span><br>" # Frecuencia EXTRA Grande
+                                f"<span style='font-size:2.2em; {color_style}'>p={p_val:.3f}</span>" # P-valor MUY Grande
                             )
 
                     custom_colors = [
@@ -252,11 +252,11 @@ if uploaded_file is not None:
                         hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
                     )
                     
-                    # Layout para textos GIGANTES
+                    # Aumento de altura para dar espacio a las letras gigantes
                     fig_heat.update_layout(
-                        height=750,
+                        height=850, # Altura generosa para evitar solapamientos
                         coloraxis_colorbar=dict(
-                            title=dict(text="Frecuencia", font=dict(size=22)), # Leyenda Grande
+                            title=dict(text="Frecuencia", font=dict(size=22)), 
                             tickfont=dict(size=18),
                             lenmode="fraction", len=0.8
                         )
