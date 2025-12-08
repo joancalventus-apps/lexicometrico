@@ -96,7 +96,7 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales.")
         else:
-            # --- CÁLCULOS ---
+            # --- CÁLCULOS BASE ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
@@ -130,8 +130,8 @@ if uploaded_file is not None:
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS ---
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🕸️ Redes", "❤️ Sentimientos"])
+            # --- PESTAÑAS (Ahora son 5) ---
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud (Jaccard)", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- 1. FRECUENCIA ---
             with tab1:
@@ -206,7 +206,7 @@ if uploaded_file is not None:
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
                 
                 if not df_heatmap_filtered.empty:
-                    # Cálculo Observados
+                    # Observados
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
                     # Colores
@@ -216,36 +216,31 @@ if uploaded_file is not None:
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # 1. VISUALIZACIÓN GRÁFICA (LIMPIA)
+                    # 1. VISUAL
                     st.subheader("1. Representación Visual")
                     fig_heat = px.imshow(
                         observed,
-                        text_auto=False, # ¡SIN TEXTO!
+                        text_auto=False,
                         aspect="auto",
                         color_continuous_scale=custom_colors,
                         labels=dict(x="", y="", color="Frecuencia")
                     )
                     
-                    # Ajustes solo para que se lean bien los ejes
                     fig_heat.update_layout(height=500)
                     fig_heat.update_xaxes(side="top", tickfont=dict(size=14))
                     fig_heat.update_yaxes(tickfont=dict(size=14))
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
-                    # 2. TABLA ESTADÍSTICA (SPSS STYLE)
+                    # 2. TABLA ESTADÍSTICA
                     st.markdown("---")
                     st.subheader("2. Tabla de Estadísticos y Significación")
                     
-                    # Cálculo Estadístico para la Tabla
                     chi2, p_global, dof, expected = chi2_contingency(observed)
                     residuals = (observed - expected) / np.sqrt(expected)
                     p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
                     
-                    # Construir DataFrame Detallado
                     stats_data = []
-                    
-                    # Iteramos por la matriz
                     for cat in observed.index:
                         for word in observed.columns:
                             freq_val = observed.loc[cat, word]
@@ -261,29 +256,76 @@ if uploaded_file is not None:
                             })
                     
                     df_stats = pd.DataFrame(stats_data)
-                    
-                    # Leyenda de Significación
                     st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
-                    
-                    # Mostramos tabla interactiva (el usuario puede ordenar por Sig. o Valor-p)
                     st.dataframe(
                         df_stats, 
                         use_container_width=True,
                         column_config={
-                            "Categoría": st.column_config.TextColumn("Categoría", width="medium"),
-                            "Término": st.column_config.TextColumn("Término", width="medium"),
                             "Frecuencia": st.column_config.NumberColumn("Frecuencia", format="%d"),
-                            "Valor-p": st.column_config.TextColumn("Valor-p"), # Texto para mantener los ceros 0.000
-                            "Sig.": st.column_config.TextColumn("Sig. (SPSS)", help="Nivel de significación estadística")
                         },
                         hide_index=True
                     )
-                    
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- 3. REDES ---
+            # --- 3. SIMILITUD JACCARD (NUEVA PESTAÑA) ---
             with tab3:
+                st.subheader("Análisis de Similitud de Vocabulario (Jaccard)")
+                st.markdown("""
+                Este análisis compara el vocabulario completo de los grupos. 
+                - **1.0 (Azul oscuro):** Vocabulario idéntico.
+                - **0.0 (Blanco):** No comparten ninguna palabra.
+                """)
+                
+                cat_jaccard = st.selectbox("Comparar grupos de la variable:", cat_cols, key='jaccard_cat')
+                
+                # Agrupar vocabulario por categoría
+                # Concatenamos todos los tokens de cada grupo en un set único
+                df_grouped = df.groupby(cat_jaccard)['tokens'].apply(list)
+                
+                group_vocab = {}
+                for cat, list_of_lists in df_grouped.items():
+                    # Aplanar lista de listas y convertir a set único
+                    flat_list = [item for sublist in list_of_lists for item in sublist]
+                    group_vocab[cat] = set(flat_list)
+                
+                # Crear matriz de Jaccard
+                groups = sorted(list(group_vocab.keys()))
+                size = len(groups)
+                jaccard_matrix = np.zeros((size, size))
+                
+                for i in range(size):
+                    for j in range(size):
+                        if i == j:
+                            jaccard_matrix[i, j] = 1.0
+                        else:
+                            set_a = group_vocab[groups[i]]
+                            set_b = group_vocab[groups[j]]
+                            
+                            intersection = len(set_a.intersection(set_b))
+                            union = len(set_a.union(set_b))
+                            
+                            jaccard_matrix[i, j] = intersection / union if union > 0 else 0
+                
+                # Graficar Matriz
+                fig_j = px.imshow(
+                    jaccard_matrix,
+                    x=groups,
+                    y=groups,
+                    text_auto='.2f', # Mostrar valor con 2 decimales
+                    color_continuous_scale='Blues',
+                    range_color=[0, 1], # Forzar escala 0 a 1
+                    title=f"Matriz de Similitud: {cat_jaccard}"
+                )
+                
+                fig_j.update_layout(height=600)
+                fig_j.update_xaxes(side="top", tickfont=dict(size=14))
+                fig_j.update_yaxes(tickfont=dict(size=14))
+                
+                st.plotly_chart(fig_j, use_container_width=True)
+
+            # --- 4. REDES ---
+            with tab4:
                 st.subheader("Red de Co-ocurrencia")
                 lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
                 vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code_net))
@@ -305,8 +347,8 @@ if uploaded_file is not None:
                 except Exception as e:
                     st.warning(f"Se necesitan más datos: {e}")
 
-            # --- 4. SENTIMIENTOS ---
-            with tab4:
+            # --- 5. SENTIMIENTOS ---
+            with tab5:
                 c1, c2 = st.columns(2)
                 with c1:
                     fig_h = px.histogram(df, x='polaridad', nbins=20, title="Distribución de Polaridad", color_discrete_sequence=['teal'])
