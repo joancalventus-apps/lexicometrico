@@ -10,12 +10,18 @@ from collections import Counter
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-# Importaciones necesarias de sklearn
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="LexicoMapper Pro", layout="wide")
+
+# --- ESTILOS CSS PERSONALIZADOS (Para maximizar espacio) ---
+st.markdown("""
+    <style>
+    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    </style>
+""", unsafe_allow_html=True)
 
 # --- GESTIÓN DE ESTADO ---
 if 'selected_word' not in st.session_state:
@@ -59,7 +65,6 @@ if uploaded_file is not None:
         cat_cols = df.columns[:-1].tolist()
 
         with st.spinner('Procesando corpus...'):
-            # Procesamiento
             df['tokens'] = df[text_col].apply(lambda x: clean_text(x, lang_opt, custom_stopwords_list))
             
             all_tokens_raw = [t for sub in df['tokens'] for t in sub]
@@ -75,13 +80,13 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales.")
         else:
-            # --- DATOS PARA GRÁFICOS ---
+            # --- DATOS ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # Clustering Semántico (KMeans)
+            # Clustering Semántico
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -106,49 +111,63 @@ if uploaded_file is not None:
             # --- PESTAÑAS ---
             tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
 
-            # --- PESTAÑA 1: VISUALIZACIÓN COMBINADA ---
+            # --- PESTAÑA 1 ---
             with tab1:
                 col_left, col_right = st.columns([1, 1])
                 
                 with col_left:
-                    st.subheader("Frecuencia (Clic para KWIC)")
-                    st.caption("Haz clic en una barra para ver contextos abajo.")
+                    st.subheader("Top Términos (Interactivo)")
+                    st.caption("🔍 Haz clic en una palabra para ver sus contextos.")
+                    
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
                         color='Grupo', text='Frecuencia', color_discrete_map=group_color_map
                     )
-                    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, height=500)
                     
-                    # --- INTERACTIVIDAD ---
-                    # Capturamos el evento de selección
+                    # --- MEJORAS VISUALES SOLICITADAS ---
+                    fig_bar.update_layout(
+                        yaxis=dict(
+                            categoryorder='total ascending',
+                            tickfont=dict(size=15, color='black', family="Arial") # Letra más grande eje Y
+                        ),
+                        showlegend=False, 
+                        height=600,
+                        margin=dict(l=0, r=0, t=0, b=0)
+                    )
+                    fig_bar.update_traces(
+                        textposition='outside',
+                        textfont_size=16, # Números más grandes
+                        cliponaxis=False
+                    )
+                    
                     event = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun")
                     
-                    # Lógica para actualizar la palabra seleccionada
                     if event and len(event['selection']['points']) > 0:
                         st.session_state['selected_word'] = event['selection']['points'][0]['y']
-                    # Si el usuario hace clic fuera (deseleccionar), limpiamos, opcional
-                    # else:
-                    #    st.session_state['selected_word'] = None
 
                 with col_right:
                     st.subheader("Nube Semántica")
-                    wc = WordCloud(width=800, height=600, background_color='white', max_words=top_n, color_func=color_func).generate_from_frequencies(dict(common_words))
+                    wc = WordCloud(
+                        width=800, height=600, 
+                        background_color='white', 
+                        max_words=top_n, 
+                        color_func=color_func,
+                        prefer_horizontal=0.9
+                    ).generate_from_frequencies(dict(common_words))
+                    
                     fig_wc, ax = plt.subplots(figsize=(8,6))
                     ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
                     st.pyplot(fig_wc)
 
-                # --- SECCIÓN KWIC (Aparece abajo si hay selección) ---
+                # --- SECCIÓN KWIC AUTOMÁTICA ---
                 st.divider()
+                # Zona de anclaje visual
+                st.markdown("### 📝 Análisis de Contexto (KWIC)")
+                
                 if st.session_state['selected_word']:
                     word = st.session_state['selected_word']
-                    st.markdown(f"### 🔍 Contextos para: **{word}**")
+                    st.markdown(f"Mostrando concordancias para: **<span style='color:blue; font-size:1.2em'>{word}</span>**", unsafe_allow_html=True)
                     
-                    # Botón para cerrar
-                    if st.button("❌ Cerrar vista KWIC"):
-                        st.session_state['selected_word'] = None
-                        st.rerun()
-                    
-                    # Filtrado y Muestra
                     mask = df['str_processed'].str.contains(word, case=False, na=False)
                     resul = df[mask]
                     
@@ -159,9 +178,9 @@ if uploaded_file is not None:
                             hide_index=True
                         )
                     else:
-                        st.warning("No se encontraron coincidencias exactas en el texto procesado.")
+                        st.warning("No se encontraron coincidencias.")
                 else:
-                    st.info("👆 Haz clic en una barra del gráfico superior para ver aquí las frases originales donde aparece la palabra.")
+                    st.info("👈 Haz clic en cualquier palabra del gráfico de barras para leer aquí las frases donde aparece.")
 
             # --- PESTAÑA 2: REDES ---
             with tab2:
@@ -178,22 +197,22 @@ if uploaded_file is not None:
                     G.remove_edges_from(edges_del)
                     G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    fig_net, ax_net = plt.subplots(figsize=(10,6))
-                    pos = nx.spring_layout(G, k=0.5)
-                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1000, font_size=9, ax=ax_net)
+                    fig_net, ax_net = plt.subplots(figsize=(12,8)) # Red más grande
+                    pos = nx.spring_layout(G, k=0.6)
+                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1200, font_size=11, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
-                    st.warning(f"No hay suficientes datos para la red: {e}")
+                    st.warning(f"No hay suficientes datos: {e}")
 
             # --- PESTAÑA 3: SENTIMIENTOS ---
             with tab3:
                 c1, c2 = st.columns(2)
                 with c1:
-                    fig_h = px.histogram(df, x='polaridad', nbins=20, title="Histograma de Polaridad", color_discrete_sequence=['teal'])
+                    fig_h = px.histogram(df, x='polaridad', nbins=20, title="Distribución", color_discrete_sequence=['teal'])
                     st.plotly_chart(fig_h, use_container_width=True)
                 with c2:
-                    cat_sel = st.selectbox("Variable:", cat_cols)
-                    fig_b = px.box(df, x=cat_sel, y='polaridad', color=cat_sel, title="Polaridad por Categoría")
+                    cat_sel = st.selectbox("Variable Categórica:", cat_cols)
+                    fig_b = px.box(df, x=cat_sel, y='polaridad', color=cat_sel)
                     st.plotly_chart(fig_b, use_container_width=True)
 
     except Exception as e:
