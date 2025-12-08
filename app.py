@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
-import plotly.graph_objects as go
+import networkx as nx
 from textblob import TextBlob
 from wordcloud import WordCloud
 from collections import Counter
@@ -16,7 +16,7 @@ from sklearn.cluster import KMeans
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
-# Estilos CSS
+# Estilos CSS para limpieza y fuentes
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
@@ -30,8 +30,7 @@ st.markdown("""
 if 'selected_word' not in st.session_state:
     st.session_state['selected_word'] = None
 
-# --- 3. CONFIGURACIÓN NLTK & GLOBAL ---
-# Diccionario Global de Idiomas (CORRECCIÓN DEL ERROR)
+# --- 3. CONFIGURACIÓN GLOBAL ---
 LANG_MAP = {'Español': 'spanish', 'Inglés': 'english'}
 
 try:
@@ -46,7 +45,6 @@ except LookupError:
 # --- 4. FUNCIONES ---
 def clean_text(text, language='Español', custom_stops=[], min_len=2):
     if pd.isna(text): return []
-    # Usamos la variable global LANG_MAP
     lang_code = LANG_MAP.get(language, 'spanish')
     stop_words = set(stopwords.words(lang_code))
     stop_words.update(set(custom_stops))
@@ -88,7 +86,7 @@ if uploaded_file is not None:
             all_tokens = [token for sublist in df['tokens'] for token in sublist]
 
         if len(all_tokens) == 0:
-            st.error("No hay palabras suficientes con los filtros actuales. Reduce la frecuencia mínima.")
+            st.error("No hay palabras suficientes con los filtros actuales.")
         else:
             # --- CÁLCULOS ---
             freq_dist = Counter(all_tokens)
@@ -96,14 +94,14 @@ if uploaded_file is not None:
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # --- LÓGICA DEFAULT KWIC ---
+            # --- SELECCIÓN POR DEFECTO ---
+            # Si es el inicio, seleccionamos la palabra #1
             available_words = set(df_freq['Término'])
-            # Si no hay selección o la selección previa ya no existe en el nuevo filtro
             if st.session_state['selected_word'] is None or st.session_state['selected_word'] not in available_words:
                 if not df_freq.empty:
                     st.session_state['selected_word'] = df_freq.iloc[0]['Término']
 
-            # --- CLUSTERING ---
+            # --- CLUSTERING SEMÁNTICO ---
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -120,17 +118,23 @@ if uploaded_file is not None:
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
-            
+            # Diccionario palabra -> color (para la Nube)
+            word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
+
+            # Función para colorear la nube (Match exacto con barras)
+            def color_func(word, **kwargs):
+                return word_color_map.get(word, '#888888')
+
             # --- PESTAÑAS ---
             tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
 
             with tab1:
-                col_left, col_right = st.columns([1, 1])
+                col_left, col_right = st.columns([1.2, 0.8]) # Dar un poco más de espacio a la barra
                 
-                # --- A. BARRAS ---
+                # --- A. BARRAS INTERACTIVAS ---
                 with col_left:
                     st.subheader("Glosario de términos más utilizados")
-                    st.caption("Haz clic en una barra para actualizar el contexto.")
+                    st.markdown("**Haz clic en una barra para mostrar el contexto:**")
                     
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
@@ -140,103 +144,52 @@ if uploaded_file is not None:
                     fig_bar.update_layout(
                         yaxis=dict(categoryorder='total ascending', tickfont=dict(size=16, color='black', family="Arial Black")),
                         xaxis=dict(showticklabels=False),
-                        showlegend=False, height=600, margin=dict(l=0, r=0, t=0, b=0)
+                        showlegend=False, height=650, margin=dict(l=0, r=0, t=0, b=0)
                     )
                     fig_bar.update_traces(textposition='outside', textfont_size=18, cliponaxis=False, width=0.7)
                     
+                    # Interacción robusta
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
                     if event_bar and event_bar['selection']['points']:
                         new_word = event_bar['selection']['points'][0]['y']
                         st.session_state['selected_word'] = new_word
 
-                # --- B. NUBE (COMPRIMIDA & INTERACTIVA) ---
+                # --- B. NUBE VISUAL (Formato Script 1 - Perfecto) ---
                 with col_right:
                     st.subheader("Nube Semántica")
-                    st.caption("Haz clic en una palabra para actualizar el contexto.")
+                    st.markdown("*(Representación visual de campos semánticos)*")
                     
-                    # 1. Ajuste de dimensiones del CANVAS (Esto comprime las palabras)
-                    # Reducimos width/height para obligar al algoritmo a juntarlas
-                    wc_width, wc_height = 400, 400 
+                    # Recuperamos el formato original de WordCloud (Matplotlib)
                     wc = WordCloud(
-                        width=wc_width, height=wc_height, 
-                        max_words=top_n, 
-                        prefer_horizontal=1.0, # Intentar que todas sean horizontales para mejor lectura
-                        relative_scaling=0.5,  # Compactar según frecuencia
-                        background_color='white',
-                        margin=2
+                        width=600, height=800, 
+                        background_color='white', 
+                        max_words=top_n,
+                        color_func=color_func, # Aplicar mismos colores
+                        prefer_horizontal=0.9,
+                        relative_scaling=0.5
                     ).generate_from_frequencies(dict(common_words))
                     
-                    # 2. Extracción
-                    word_list = []
-                    for (word, freq), font_size, position, orientation, _ in wc.layout_:
-                        grp = str(word_to_cluster.get(word, '0'))
-                        color_hex = group_color_map.get(grp, '#333333')
-                        
-                        word_list.append({
-                            'word': word, 
-                            'x': position[1], 
-                            'y': -position[0], 
-                            'size': font_size, 
-                            'freq': freq, 
-                            'color': color_hex
-                        })
-                    
-                    df_cloud = pd.DataFrame(word_list)
-                    
-                    # 3. Dibujado
-                    fig_cloud = go.Figure()
-                    
-                    # Capa Clic (Invisibles)
-                    fig_cloud.add_trace(go.Scatter(
-                        x=df_cloud['x'], y=df_cloud['y'],
-                        mode='markers',
-                        marker=dict(size=df_cloud['size']*1.5, opacity=0, color='rgba(0,0,0,0)'),
-                        hoverinfo='skip'
-                    ))
+                    fig_wc, ax = plt.subplots(figsize=(6,8))
+                    ax.imshow(wc, interpolation='bilinear')
+                    ax.axis('off')
+                    st.pyplot(fig_wc) # Renderizado estático de alta calidad
 
-                    # Capa Texto
-                    fig_cloud.add_trace(go.Scatter(
-                        x=df_cloud['x'], y=df_cloud['y'],
-                        mode='text',
-                        text=df_cloud['word'],
-                        textfont=dict(
-                            size=df_cloud['size'], # Tamaño original del cálculo WordCloud
-                            color=df_cloud['color'], 
-                            family="Arial Black"
-                        ),
-                        hoverinfo='text',
-                        hovertext=[f"{w}: {f}" for w, f in zip(df_cloud['word'], df_cloud['freq'])]
-                    ))
-                    
-                    # TRUCO DE COMPRESIÓN VISUAL: Forzar rango de ejes exacto
-                    fig_cloud.update_layout(
-                        xaxis=dict(range=[0, wc_width], visible=False), 
-                        yaxis=dict(range=[-wc_height, 0], visible=False),
-                        hovermode='closest', plot_bgcolor='white', 
-                        height=600, 
-                        margin=dict(l=0, r=0, t=0, b=0), 
-                        dragmode=False,
-                        showlegend=False
-                    )
-
-                    event_cloud = st.plotly_chart(fig_cloud, use_container_width=True, on_select="rerun", key="cloud_chart")
-                    
-                    if event_cloud and event_cloud['selection']['points']:
-                        idx = event_cloud['selection']['points'][0]['point_index']
-                        if idx < len(df_cloud):
-                            new_word_cloud = df_cloud.iloc[idx]['word']
-                            st.session_state['selected_word'] = new_word_cloud
-
-                # --- C. KWIC ---
+                # --- C. SECCIÓN KWIC ---
                 st.markdown("---")
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 
-                current_word = st.session_state['selected_word']
+                # Buscador manual opcional por si quieren buscar algo de la nube sin clicar la barra
+                col_search, col_info = st.columns([1, 3])
+                with col_search:
+                     manual_search = st.text_input("🔍 O escribe una palabra aquí:", value="")
                 
+                # Lógica de prioridad: Si escriben, usa eso. Si no, usa el clic/default.
+                current_word = manual_search if manual_search else st.session_state['selected_word']
+
                 st.markdown(f"""
-                <div style="background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 6px solid #ff4b4b; margin-bottom:20px;">
-                    <h4 style="margin:0; color:#333;">
-                        Término analizado: <span style="font-size:1.4em; color:#ff4b4b;">{current_word}</span>
+                <div style="background-color:#f0f2f6; padding:15px; border-radius:10px; border-left: 6px solid #e74c3c;">
+                    <h4 style="margin:0; color:#2c3e50;">
+                        Contextos para: <span style="color:#c0392b; font-size:1.3em;">{current_word}</span>
                     </h4>
                 </div>
                 """, unsafe_allow_html=True)
@@ -244,17 +197,17 @@ if uploaded_file is not None:
                 if current_word:
                     mask = df['str_processed'].str.contains(current_word, case=False, na=False)
                     resul = df[mask]
+                    
                     if len(resul) > 0:
                         st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
                     else:
-                        st.warning(f"No se encontraron contextos exactos para '{current_word}'.")
+                        st.warning(f"No se encontraron coincidencias exactas para '{current_word}' con los filtros actuales.")
 
                 st.markdown("<br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 2: REDES ---
             with tab2:
                 st.subheader("Red de Co-ocurrencia")
-                # CORRECCIÓN: Usamos LANG_MAP global
                 lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
                 vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code_net))
                 try:
@@ -269,7 +222,7 @@ if uploaded_file is not None:
                     G.remove_nodes_from(list(nx.isolates(G)))
                     
                     fig_net, ax_net = plt.subplots(figsize=(12,8))
-                    pos = nx.spring_layout(G, k=0.5) 
+                    pos = nx.spring_layout(G, k=0.5, seed=42)
                     nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1500, font_size=10, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
