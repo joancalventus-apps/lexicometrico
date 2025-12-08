@@ -52,6 +52,13 @@ def clean_text(text, language='Español', custom_stops=[], min_len=2):
     tokens = [word for word in tokens if word.isalpha() and word not in stop_words and len(word) >= min_len]
     return tokens
 
+# Función auxiliar para Sig. SPSS
+def get_significance_stars(p_value):
+    if p_value < 0.001: return "***"
+    if p_value < 0.01:  return "**"
+    if p_value < 0.05:  return "*"
+    return "NS"
+
 # --- 5. INTERFAZ PRINCIPAL ---
 
 st.title("📊 Lexicométrico")
@@ -194,14 +201,6 @@ if uploaded_file is not None:
                 
                 st.markdown(f"### {cat_heatmap} vs Vocabulario")
                 
-                with st.expander("¿Cómo interpretar los valores del mapa de calor?"):
-                    st.markdown("""
-                    1. **Número Grande:** Frecuencia absoluta (cuántas veces aparece).
-                    2. **p:** Probabilidad estadística.
-                       - **p < 0.050:** Diferencia significativa (Relevante).
-                       - **p > 0.050:** Dentro de lo normal.
-                    """)
-                
                 df_exploded = df.explode('tokens')
                 top_words_list = df_freq['Término'].head(20).tolist()
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
@@ -210,62 +209,76 @@ if uploaded_file is not None:
                     # Cálculo Observados
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # Cálculo Estadístico
-                    chi2, p_global, dof, expected = chi2_contingency(observed)
-                    residuals = (observed - expected) / np.sqrt(expected)
-                    p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
-                    
-                    # Construcción Matriz Texto
-                    text_matrix = pd.DataFrame(index=observed.index, columns=observed.columns)
-                    
-                    for i in range(len(observed)):
-                        for j in range(len(observed.columns)):
-                            obs_val = observed.iloc[i, j]
-                            p_val = p_values_matrix[i, j]
-                            
-                            # ESTILOS MASIVOS
-                            color_style = "color:black; font-weight:900" if p_val < 0.05 else "color:#444"
-                            
-                            text_matrix.iloc[i, j] = (
-                                f"<span style='font-size:3.0em; font-weight:900'>{obs_val}</span><br>" # Frecuencia EXTRA Grande
-                                f"<span style='font-size:2.2em; {color_style}'>p={p_val:.3f}</span>" # P-valor MUY Grande
-                            )
-
+                    # Colores
                     custom_colors = [
                         [0.0, "#FFFFCC"], [0.2, "#FED976"], 
                         [0.4, "#FD8D3C"], [0.6, "#E31A1C"],
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # Graficar
+                    # 1. VISUALIZACIÓN GRÁFICA (LIMPIA)
+                    st.subheader("1. Representación Visual")
                     fig_heat = px.imshow(
                         observed,
-                        text_auto=False, 
+                        text_auto=False, # ¡SIN TEXTO!
                         aspect="auto",
                         color_continuous_scale=custom_colors,
                         labels=dict(x="", y="", color="Frecuencia")
                     )
                     
-                    fig_heat.update_traces(
-                        text=text_matrix, 
-                        texttemplate="%{text}",
-                        hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
-                    )
-                    
-                    # Aumento de altura para dar espacio a las letras gigantes
-                    fig_heat.update_layout(
-                        height=850, # Altura generosa para evitar solapamientos
-                        coloraxis_colorbar=dict(
-                            title=dict(text="Frecuencia", font=dict(size=22)), 
-                            tickfont=dict(size=18),
-                            lenmode="fraction", len=0.8
-                        )
-                    )
-                    
-                    fig_heat.update_xaxes(side="top", tickfont=dict(size=20, family="Arial Black"))
-                    fig_heat.update_yaxes(tickfont=dict(size=20, family="Arial Black"))
+                    # Ajustes solo para que se lean bien los ejes
+                    fig_heat.update_layout(height=500)
+                    fig_heat.update_xaxes(side="top", tickfont=dict(size=14))
+                    fig_heat.update_yaxes(tickfont=dict(size=14))
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
+                    
+                    # 2. TABLA ESTADÍSTICA (SPSS STYLE)
+                    st.markdown("---")
+                    st.subheader("2. Tabla de Estadísticos y Significación")
+                    
+                    # Cálculo Estadístico para la Tabla
+                    chi2, p_global, dof, expected = chi2_contingency(observed)
+                    residuals = (observed - expected) / np.sqrt(expected)
+                    p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
+                    
+                    # Construir DataFrame Detallado
+                    stats_data = []
+                    
+                    # Iteramos por la matriz
+                    for cat in observed.index:
+                        for word in observed.columns:
+                            freq_val = observed.loc[cat, word]
+                            p_val = p_values_matrix[observed.index.get_loc(cat), observed.columns.get_loc(word)]
+                            sig_label = get_significance_stars(p_val)
+                            
+                            stats_data.append({
+                                "Categoría": cat,
+                                "Término": word,
+                                "Frecuencia": int(freq_val),
+                                "Valor-p": f"{p_val:.3f}",
+                                "Sig.": sig_label
+                            })
+                    
+                    df_stats = pd.DataFrame(stats_data)
+                    
+                    # Leyenda de Significación
+                    st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
+                    
+                    # Mostramos tabla interactiva (el usuario puede ordenar por Sig. o Valor-p)
+                    st.dataframe(
+                        df_stats, 
+                        use_container_width=True,
+                        column_config={
+                            "Categoría": st.column_config.TextColumn("Categoría", width="medium"),
+                            "Término": st.column_config.TextColumn("Término", width="medium"),
+                            "Frecuencia": st.column_config.NumberColumn("Frecuencia", format="%d"),
+                            "Valor-p": st.column_config.TextColumn("Valor-p"), # Texto para mantener los ceros 0.000
+                            "Sig.": st.column_config.TextColumn("Sig. (SPSS)", help="Nivel de significación estadística")
+                        },
+                        hide_index=True
+                    )
+                    
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
