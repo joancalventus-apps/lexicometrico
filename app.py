@@ -17,10 +17,22 @@ from scipy.stats import chi2_contingency, norm
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
+# --- INYECCIÓN CSS (ESTILOS) ---
 st.markdown("""
     <style>
+    /* Ajuste de márgenes generales */
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
-    .stDataFrame {font-size: 1.0rem;} /* Letra un poco más compacta en tablas */
+    
+    /* 1. AUMENTAR TAMAÑO ETIQUETAS DE PESTAÑAS (TABS) */
+    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        font-size: 1.3rem;
+        font-weight: 600;
+    }
+    
+    /* Ajuste de fuente en tablas */
+    .stDataFrame {font-size: 1.0rem;}
+    
+    /* Ocultar elementos de Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -52,7 +64,6 @@ def clean_text(text, language='Español', custom_stops=[], min_len=2):
     tokens = [word for word in tokens if word.isalpha() and word not in stop_words and len(word) >= min_len]
     return tokens
 
-# Función auxiliar para Sig. SPSS
 def get_significance_stars(p_value):
     if p_value < 0.001: return "***"
     if p_value < 0.01:  return "**"
@@ -216,7 +227,7 @@ if uploaded_file is not None:
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # 1. VISUAL (Gráfica limpia)
+                    # 1. VISUAL
                     st.subheader("1. Representación Visual")
                     fig_heat = px.imshow(
                         observed,
@@ -229,10 +240,10 @@ if uploaded_file is not None:
                     fig_heat.update_layout(height=500)
                     fig_heat.update_xaxes(side="top", tickfont=dict(size=14))
                     fig_heat.update_yaxes(tickfont=dict(size=14))
-                    
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
-                    # 2. TABLA ESTADÍSTICA (Concentrada y Compacta)
+                    # 2. TABLA ESTADÍSTICA (Ajustada y Concentrada)
+                    # Usamos columnas para centrar la tabla y evitar que se expanda demasiado
                     st.markdown("---")
                     st.subheader("2. Tabla de Estadísticos y Significación")
                     
@@ -258,11 +269,11 @@ if uploaded_file is not None:
                     df_stats = pd.DataFrame(stats_data)
                     st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
                     
-                    # CONFIGURACIÓN COMPACTA (height=400 + anchos definidos)
+                    # Tabla concentrada
                     st.dataframe(
                         df_stats, 
                         use_container_width=True,
-                        height=400, # Altura fija para concentrar la vista
+                        height=350, # Altura reducida para concentrar la información
                         column_config={
                             "Categoría": st.column_config.TextColumn("Categoría", width="small"),
                             "Término": st.column_config.TextColumn("Término", width="medium"),
@@ -275,7 +286,7 @@ if uploaded_file is not None:
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- 3. SIMILITUD JACCARD (EJES LIMPIOS) ---
+            # --- 3. SIMILITUD JACCARD ---
             with tab3:
                 st.subheader("Análisis de Similitud de Vocabulario (Jaccard)")
                 st.markdown("Comparación de vocabulario compartido entre grupos (1.0 = Idéntico).")
@@ -314,19 +325,17 @@ if uploaded_file is not None:
                     title=f"Matriz de Similitud: {cat_jaccard}"
                 )
                 
-                # EJES LIMPIOS: Solo mostrar las categorías, sin ticks numéricos extra
+                # CORRECCIÓN DE ETIQUETAS JACCARD: Forzar mostrar todas
                 fig_j.update_layout(
                     height=600,
                     xaxis = dict(
-                        tickmode = 'array',
-                        tickvals = np.arange(len(groups)),
-                        ticktext = groups,
+                        tickmode = 'linear', # Forzar lineal para mostrar todos
+                        dtick = 1,           # Intervalo de 1 en 1
                         side="top"
                     ),
                     yaxis = dict(
-                        tickmode = 'array',
-                        tickvals = np.arange(len(groups)),
-                        ticktext = groups
+                        tickmode = 'linear',
+                        dtick = 1
                     )
                 )
                 fig_j.update_xaxes(tickfont=dict(size=14))
