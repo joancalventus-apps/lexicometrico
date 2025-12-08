@@ -12,7 +12,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
-from scipy.stats import chi2_contingency, norm # norm para calcular p-values
+from scipy.stats import chi2_contingency, norm
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
@@ -118,7 +118,7 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # Colores para gráficos de barras
+            # Colores
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
@@ -156,7 +156,7 @@ if uploaded_file is not None:
 
                 with col_right:
                     st.subheader("Nube Semántica")
-                    # Visualización estética
+                    # Nube visual comprimida
                     wc = WordCloud(
                         width=500, height=500, 
                         background_color='white', 
@@ -203,12 +203,10 @@ if uploaded_file is not None:
 
             # --- PESTAÑA 2: MAPA DE CALOR ESTADÍSTICO ---
             with tab2:
-                # Renombramos el título como pediste
                 cat_heatmap = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
                 
                 st.markdown(f"### {cat_heatmap} vs Vocabulario")
                 
-                # Explicación breve de la estadística (Manteniendo la ayuda)
                 with st.expander("¿Cómo interpretar los valores del mapa de calor?"):
                     st.markdown("""
                     Esta tabla muestra qué tan relevante es una palabra para cada grupo.
@@ -224,43 +222,36 @@ if uploaded_file is not None:
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
                 
                 if not df_heatmap_filtered.empty:
-                    # Tabla de contingencia (Observados)
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # 2. Cálculo Estadístico (Chi2 y Residuos)
+                    # 2. Cálculo Estadístico
                     chi2, p_global, dof, expected = chi2_contingency(observed)
-                    
-                    # Residuos Estandarizados (Z-scores)
                     residuals = (observed - expected) / np.sqrt(expected)
                     
-                    # 3. Conversión Z-score a P-value (Two-tailed)
-                    # p = 2 * (1 - cdf(|Z|))
-                    p_values_matrix = 2 * (1 - norm.cdf(abs(residuals)))
+                    # CORRECCIÓN DE ERROR: Convertimos explícitamente a array de numpy
+                    p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
                     
-                    # 4. Construir Matriz de Texto con formato HTML
+                    # 4. Construir Matriz de Texto
                     text_matrix = observed.copy().astype(object)
+                    
                     for i in range(len(observed)):
                         for j in range(len(observed.columns)):
                             obs_val = observed.iloc[i, j]
-                            p_val = p_values_matrix.iloc[i, j]
+                            # CORRECCIÓN: Usamos [i, j] porque es un array, no iloc
+                            p_val = p_values_matrix[i, j] 
                             
-                            # Marcador visual de significancia
                             sig_style = "font-weight:bold; color:black;" if p_val < 0.05 else "color:#444;"
                             
-                            # Formato solicitado: Frecuencia grande y p con 3 decimales
                             text_matrix.iloc[i, j] = (
                                 f"<span style='font-size:1.4em; font-weight:bold'>{obs_val}</span><br>"
                                 f"<span style='font-size:1.1em; {sig_style}'>p: {p_val:.3f}</span>"
                             )
 
-                    # 5. Colores personalizados (Amarillo -> Naranja -> Rojo -> Granate)
+                    # Colores: Amarillo -> Naranja -> Rojo -> Granate
                     custom_colors = [
-                        [0.0, "#FFFFCC"], # Amarillo
-                        [0.2, "#FED976"], 
-                        [0.4, "#FD8D3C"],
-                        [0.6, "#E31A1C"],
-                        [0.8, "#800026"], # Granate
-                        [1.0, "#4A0012"]  # Granate oscuro
+                        [0.0, "#FFFFCC"], [0.2, "#FED976"], 
+                        [0.4, "#FD8D3C"], [0.6, "#E31A1C"],
+                        [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
                     # 6. Graficar Heatmap
@@ -272,20 +263,15 @@ if uploaded_file is not None:
                         labels=dict(x="", y="", color="Frecuencia")
                     )
                     
-                    # Inyectar texto formateado
                     fig_heat.update_traces(
                         text=text_matrix, 
                         texttemplate="%{text}",
                         hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
                     )
                     
-                    # 7. AUMENTO DE TAMAÑOS DE FUENTE (Solicitud explícita)
-                    fig_heat.update_layout(
-                        height=650,
-                        font=dict(size=14), # Fuente base
-                    )
-                    fig_heat.update_xaxes(side="top", tickfont=dict(size=16, family="Arial Black")) # Eje X (Palabras)
-                    fig_heat.update_yaxes(tickfont=dict(size=16, family="Arial Black")) # Eje Y (Categorías)
+                    fig_heat.update_layout(height=650, font=dict(size=14))
+                    fig_heat.update_xaxes(side="top", tickfont=dict(size=16, family="Arial Black"))
+                    fig_heat.update_yaxes(tickfont=dict(size=16, family="Arial Black"))
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
                 else:
