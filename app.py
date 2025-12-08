@@ -16,12 +16,11 @@ from sklearn.cluster import KMeans
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
-# --- ESTILOS CSS (Márgenes y Fuentes) ---
+# --- ESTILOS CSS ---
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
     .stDataFrame {font-size: 1.1rem;}
-    /* Ocultar menú hamburguesa por defecto para limpieza */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -44,7 +43,6 @@ except LookupError:
 # --- FUNCIONES ---
 def clean_text(text, language='spanish', custom_stops=[], min_len=2):
     if pd.isna(text): return []
-    # Mapeo simple de idioma para nltk
     lang_map = {'Español': 'spanish', 'Inglés': 'english'}
     stop_words = set(stopwords.words(lang_map.get(language, 'spanish')))
     stop_words.update(set(custom_stops))
@@ -58,7 +56,6 @@ st.title("📊 Lexicométrico")
 
 # BARRA LATERAL
 st.sidebar.header("1. Datos y Filtros")
-# Nota: El texto "Drag and drop" es del navegador, pero el label lo ponemos en español
 uploaded_file = st.sidebar.file_uploader("Cargar archivo CSV (Matriz de datos)", type=["csv"])
 lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
 custom_stopwords_input = st.sidebar.text_area("Excluir palabras (separar por coma):", placeholder="ej: respuesta, ns, nc")
@@ -86,13 +83,18 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales. Reduce la frecuencia mínima.")
         else:
-            # --- PREPARACIÓN DE DATOS ---
+            # --- CÁLCULOS DE FRECUENCIA ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # Clustering Semántico (KMeans)
+            # --- SELECCIÓN POR DEFECTO (FIX SOLICITADO) ---
+            # Si no hay palabra seleccionada aún, seleccionamos la #1 automáticamente
+            if st.session_state['selected_word'] is None and not df_freq.empty:
+                st.session_state['selected_word'] = df_freq.iloc[0]['Término']
+
+            # --- CLUSTERING SEMÁNTICO ---
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -105,24 +107,22 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # Colores Consistentes
+            # --- MAPEO DE COLORES ---
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
-            # Diccionario rápido palabra -> color
-            word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
-
+            
             # --- PESTAÑAS ---
             tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
 
-            # --- PESTAÑA 1: VISUALIZACIÓN ---
+            # --- PESTAÑA 1 ---
             with tab1:
                 col_left, col_right = st.columns([1, 1])
                 
-                # --- A. GRÁFICO DE BARRAS ---
+                # GRÁFICO DE BARRAS
                 with col_left:
                     st.subheader("Glosario de términos más utilizados")
-                    st.caption("Haz clic en una barra para filtrar el contexto.")
+                    st.caption("Haz clic en una barra para cambiar el contexto.")
                     
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
@@ -130,67 +130,48 @@ if uploaded_file is not None:
                     )
                     
                     fig_bar.update_layout(
-                        yaxis=dict(
-                            categoryorder='total ascending',
-                            tickfont=dict(size=18, color='black', family="Arial Black")
-                        ),
+                        yaxis=dict(categoryorder='total ascending', tickfont=dict(size=18, color='black', family="Arial Black")),
                         xaxis=dict(showticklabels=False),
-                        showlegend=False, 
-                        height=650,
-                        margin=dict(l=0, r=0, t=0, b=0)
+                        showlegend=False, height=650, margin=dict(l=0, r=0, t=0, b=0)
                     )
-                    fig_bar.update_traces(
-                        textposition='outside',
-                        textfont_size=20,
-                        cliponaxis=False,
-                        width=0.7
-                    )
+                    fig_bar.update_traces(textposition='outside', textfont_size=20, cliponaxis=False, width=0.7)
                     
-                    # Interacción Barras
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
-                    
-                    # Lógica de Captura: Prioridad al último clic
                     if event_bar and event_bar['selection']['points']:
-                        candidate_word = event_bar['selection']['points'][0]['y']
-                        if candidate_word != st.session_state['selected_word']:
-                            st.session_state['selected_word'] = candidate_word
-                            # No usamos st.rerun() aquí para evitar bucles, el estado ya cambió
+                        candidate = event_bar['selection']['points'][0]['y']
+                        if candidate != st.session_state['selected_word']:
+                            st.session_state['selected_word'] = candidate
 
-                # --- B. NUBE INTERACTIVA ---
+                # NUBE DE PALABRAS INTERACTIVA
                 with col_right:
                     st.subheader("Nube semántica")
                     
-                    # 1. Calcular posiciones (Backend WordCloud)
+                    # Generar posiciones
                     wc = WordCloud(width=600, height=650, max_words=top_n).generate_from_frequencies(dict(common_words))
                     
-                    # 2. Convertir a Datos para Plotly
+                    # Construir DataFrame para Plotly con COLOR FORZADO
                     word_list = []
-                    for (word, freq), font_size, position, orientation, color in wc.layout_:
-                        grp = word_to_cluster.get(word, '0')
-                        color_hex = group_color_map.get(grp, '#888888') # Recuperamos el color del grupo
+                    # wc.layout_ devuelve: ((word, freq), font_size, position, orientation, color_original_wc)
+                    for (word, freq), font_size, position, orientation, _ in wc.layout_:
+                        grp = str(word_to_cluster.get(word, '0')) # Aseguramos string
+                        color_hex = group_color_map.get(grp, '#333333') # Buscamos color semántico
                         
                         word_list.append({
-                            'word': word, 
-                            'x': position[1], 
-                            'y': -position[0], # Invertir Y
-                            'size': font_size, 
-                            'freq': freq, 
-                            'color': color_hex
+                            'word': word, 'x': position[1], 'y': -position[0], 
+                            'size': font_size, 'freq': freq, 'color': color_hex
                         })
                     
                     df_cloud = pd.DataFrame(word_list)
                     
-                    # 3. Dibujar Scatter Plot (Texto Interactuable)
+                    # Renderizar
                     fig_cloud = go.Figure()
-                    
                     fig_cloud.add_trace(go.Scatter(
-                        x=df_cloud['x'],
-                        y=df_cloud['y'],
+                        x=df_cloud['x'], y=df_cloud['y'],
                         mode='text',
                         text=df_cloud['word'],
                         textfont=dict(
-                            size=df_cloud['size'] * 0.9, # Ajuste de escala visual
-                            color=df_cloud['color'],      # <--- AQUI SE APLICA EL COLOR CORRECTO
+                            size=df_cloud['size'] * 0.9,
+                            color=df_cloud['color'], # <--- COLOR DEL DATAFRAME, NO EL DE LA LIBRERÍA
                             family="Arial Black"
                         ),
                         hoverinfo='text',
@@ -198,35 +179,26 @@ if uploaded_file is not None:
                     ))
                     
                     fig_cloud.update_layout(
-                        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False, visible=False),
-                        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False, visible=False),
-                        hovermode='closest',
-                        plot_bgcolor='white',
-                        height=650,
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        dragmode=False
+                        xaxis=dict(visible=False), yaxis=dict(visible=False),
+                        hovermode='closest', plot_bgcolor='white', height=650,
+                        margin=dict(l=0, r=0, t=0, b=0), dragmode=False
                     )
 
-                    # Interacción Nube
                     event_cloud = st.plotly_chart(fig_cloud, use_container_width=True, on_select="rerun", key="cloud_chart")
-                    
-                    # Lógica de Captura Nube
                     if event_cloud and event_cloud['selection']['points']:
                         idx = event_cloud['selection']['points'][0]['point_index']
-                        # Verificar que el índice sea válido
                         if idx < len(df_cloud):
-                            candidate_word_cloud = df_cloud.iloc[idx]['word']
-                            if candidate_word_cloud != st.session_state['selected_word']:
-                                st.session_state['selected_word'] = candidate_word_cloud
+                            candidate = df_cloud.iloc[idx]['word']
+                            if candidate != st.session_state['selected_word']:
+                                st.session_state['selected_word'] = candidate
 
-                # --- C. SECCIÓN KWIC ---
+                # SECCIÓN KWIC
                 st.markdown("---")
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 
                 if st.session_state['selected_word']:
                     word = st.session_state['selected_word']
                     
-                    # Panel visual de la palabra seleccionada
                     st.markdown(f"""
                     <div style="background-color:#e6f3ff; padding:15px; border-radius:10px; margin-bottom:20px; border-left: 5px solid #2980b9;">
                         <h4 style="margin:0; color:#2c3e50;">
@@ -239,23 +211,16 @@ if uploaded_file is not None:
                     resul = df[mask]
                     
                     if len(resul) > 0:
-                        st.dataframe(
-                            resul[[cat_cols[0], text_col]], 
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                        st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
                     else:
                         st.warning("No se encontraron coincidencias exactas.")
-                else:
-                    st.info("👈 Haz clic en una palabra del gráfico de barras o de la nube para ver aquí su contexto de uso.")
-
-                # MARGEN INFERIOR
+                
                 st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 2: REDES ---
             with tab2:
                 st.subheader("Red de Co-ocurrencia")
-                vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words('spanish' if lang_opt=='Español' else 'english'))
+                vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_map.get(lang_opt, 'spanish')))
                 try:
                     X_net = vectorizer_net.fit_transform(df['str_processed'])
                     adj = (X_net.T * X_net)
