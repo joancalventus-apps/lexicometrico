@@ -13,10 +13,10 @@ from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
-# --- ESTILOS CSS ---
+# Estilos CSS: Limpieza visual y ajuste de tamaños
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
@@ -26,11 +26,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- GESTIÓN DE ESTADO ---
+# --- 2. GESTIÓN DE ESTADO (Memoria) ---
 if 'selected_word' not in st.session_state:
     st.session_state['selected_word'] = None
 
-# --- NLTK ---
+# --- 3. CONFIGURACIÓN NLTK ---
 try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('tokenizers/punkt_tab')
@@ -40,24 +40,28 @@ except LookupError:
     nltk.download('punkt_tab')
     nltk.download('stopwords')
 
-# --- FUNCIONES ---
-def clean_text(text, language='spanish', custom_stops=[], min_len=2):
+# --- 4. FUNCIONES ---
+def clean_text(text, language='Español', custom_stops=[], min_len=2):
     if pd.isna(text): return []
     lang_map = {'Español': 'spanish', 'Inglés': 'english'}
     stop_words = set(stopwords.words(lang_map.get(language, 'spanish')))
     stop_words.update(set(custom_stops))
     tokens = word_tokenize(str(text).lower())
+    # Filtros: alfabético y no stopword
     tokens = [word for word in tokens if word.isalpha() and word not in stop_words and len(word) >= min_len]
     return tokens
 
-# --- INTERFAZ PRINCIPAL ---
+# --- 5. INTERFAZ PRINCIPAL ---
 
 st.title("📊 Lexicométrico")
 
-# BARRA LATERAL
+# --- BARRA LATERAL ---
 st.sidebar.header("1. Datos y Filtros")
-uploaded_file = st.sidebar.file_uploader("Cargar archivo CSV (Matriz de datos)", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("Arrastrar y soltar archivo CSV aquí", type=["csv"])
 lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
+
+st.sidebar.markdown("---")
+st.sidebar.header("2. Limpieza")
 custom_stopwords_input = st.sidebar.text_area("Excluir palabras (separar por coma):", placeholder="ej: respuesta, ns, nc")
 custom_stopwords_list = [x.strip().lower() for x in custom_stopwords_input.split(',')] if custom_stopwords_input else []
 min_freq_filter = st.sidebar.slider("Frecuencia mínima de aparición:", 1, 50, 2)
@@ -65,16 +69,19 @@ min_freq_filter = st.sidebar.slider("Frecuencia mínima de aparición:", 1, 50, 
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
-        text_col = df.columns[-1]
+        text_col = df.columns[-1] # Asumimos última columna como texto
         cat_cols = df.columns[:-1].tolist()
 
         with st.spinner('Procesando corpus textual...'):
+            # Limpieza y Tokenización
             df['tokens'] = df[text_col].apply(lambda x: clean_text(x, lang_opt, custom_stopwords_list))
             
+            # Filtro Global de Frecuencia
             all_tokens_raw = [t for sub in df['tokens'] for t in sub]
             freq_raw = Counter(all_tokens_raw)
             valid_words = set(w for w, c in freq_raw.items() if c >= min_freq_filter)
             
+            # Aplicar filtro a los datos
             df['tokens'] = df['tokens'].apply(lambda tokens: [t for t in tokens if t in valid_words])
             df['str_processed'] = df['tokens'].apply(lambda x: ' '.join(x))
             df['polaridad'] = df[text_col].apply(lambda x: TextBlob(str(x)).sentiment.polarity)
@@ -83,21 +90,25 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales. Reduce la frecuencia mínima.")
         else:
-            # --- CÁLCULOS DE FRECUENCIA ---
+            # --- CÁLCULOS ESTADÍSTICOS ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # --- SELECCIÓN POR DEFECTO (FIX SOLICITADO) ---
-            # Si no hay palabra seleccionada aún, seleccionamos la #1 automáticamente
-            if st.session_state['selected_word'] is None and not df_freq.empty:
-                st.session_state['selected_word'] = df_freq.iloc[0]['Término']
+            # --- LÓGICA DE SELECCIÓN POR DEFECTO ---
+            # Si no hay palabra seleccionada (inicio de la app), seleccionamos la #1 (Top 1)
+            # También verificamos si la palabra seleccionada sigue existiendo en el nuevo filtro
+            available_words = set(df_freq['Término'])
+            if st.session_state['selected_word'] is None or st.session_state['selected_word'] not in available_words:
+                if not df_freq.empty:
+                    st.session_state['selected_word'] = df_freq.iloc[0]['Término']
 
-            # --- CLUSTERING SEMÁNTICO ---
+            # --- CLUSTERING SEMÁNTICO (Agrupación) ---
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
+                # Máximo 5 grupos o menos si hay pocas palabras
                 n_clusters = min(5, len(df_freq))
                 kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                 clusters = kmeans.fit_predict(X.T)
@@ -107,7 +118,7 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # --- MAPEO DE COLORES ---
+            # --- PALETA DE COLORES CONSISTENTE ---
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
@@ -115,14 +126,13 @@ if uploaded_file is not None:
             # --- PESTAÑAS ---
             tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
 
-            # --- PESTAÑA 1 ---
             with tab1:
                 col_left, col_right = st.columns([1, 1])
                 
-                # GRÁFICO DE BARRAS
+                # --- A. GRÁFICO DE BARRAS ---
                 with col_left:
                     st.subheader("Glosario de términos más utilizados")
-                    st.caption("Haz clic en una barra para cambiar el contexto.")
+                    st.caption("Haz clic en una barra para actualizar el contexto abajo.")
                     
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
@@ -130,48 +140,75 @@ if uploaded_file is not None:
                     )
                     
                     fig_bar.update_layout(
-                        yaxis=dict(categoryorder='total ascending', tickfont=dict(size=18, color='black', family="Arial Black")),
+                        yaxis=dict(categoryorder='total ascending', tickfont=dict(size=16, color='black', family="Arial Black")),
                         xaxis=dict(showticklabels=False),
-                        showlegend=False, height=650, margin=dict(l=0, r=0, t=0, b=0)
+                        showlegend=False, 
+                        height=600, 
+                        margin=dict(l=0, r=0, t=0, b=0)
                     )
-                    fig_bar.update_traces(textposition='outside', textfont_size=20, cliponaxis=False, width=0.7)
+                    fig_bar.update_traces(
+                        textposition='outside', 
+                        textfont_size=18, 
+                        cliponaxis=False,
+                        width=0.7
+                    )
                     
+                    # Interacción
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
                     if event_bar and event_bar['selection']['points']:
-                        candidate = event_bar['selection']['points'][0]['y']
-                        if candidate != st.session_state['selected_word']:
-                            st.session_state['selected_word'] = candidate
+                        new_word = event_bar['selection']['points'][0]['y']
+                        st.session_state['selected_word'] = new_word
 
-                # NUBE DE PALABRAS INTERACTIVA
+                # --- B. NUBE SEMÁNTICA INTERACTIVA ---
                 with col_right:
-                    st.subheader("Nube semántica")
+                    st.subheader("Nube Semántica")
+                    st.caption("Haz clic en una palabra para actualizar el contexto abajo.")
                     
-                    # Generar posiciones
-                    wc = WordCloud(width=600, height=650, max_words=top_n).generate_from_frequencies(dict(common_words))
+                    # 1. Generación de posiciones "Compactas"
+                    # Usamos un canvas más pequeño (400x400) y prefer_horizontal alto para comprimir
+                    wc = WordCloud(
+                        width=400, height=400, 
+                        max_words=top_n, 
+                        prefer_horizontal=0.9,
+                        background_color='white'
+                    ).generate_from_frequencies(dict(common_words))
                     
-                    # Construir DataFrame para Plotly con COLOR FORZADO
+                    # 2. Extracción de coordenadas y Colores
                     word_list = []
-                    # wc.layout_ devuelve: ((word, freq), font_size, position, orientation, color_original_wc)
                     for (word, freq), font_size, position, orientation, _ in wc.layout_:
-                        grp = str(word_to_cluster.get(word, '0')) # Aseguramos string
-                        color_hex = group_color_map.get(grp, '#333333') # Buscamos color semántico
+                        grp = str(word_to_cluster.get(word, '0'))
+                        color_hex = group_color_map.get(grp, '#333333')
                         
                         word_list.append({
-                            'word': word, 'x': position[1], 'y': -position[0], 
-                            'size': font_size, 'freq': freq, 'color': color_hex
+                            'word': word, 
+                            'x': position[1], 
+                            'y': -position[0], # Invertir eje Y para Plotly
+                            'size': font_size, 
+                            'freq': freq, 
+                            'color': color_hex
                         })
                     
                     df_cloud = pd.DataFrame(word_list)
                     
-                    # Renderizar
+                    # 3. Dibujado Interactivo (Truco: Marcadores transparentes para mejorar el clic)
                     fig_cloud = go.Figure()
+                    
+                    # Capa 1: Marcadores invisibles (para capturar clic mejor)
+                    fig_cloud.add_trace(go.Scatter(
+                        x=df_cloud['x'], y=df_cloud['y'],
+                        mode='markers',
+                        marker=dict(size=df_cloud['size'], opacity=0, color='rgba(0,0,0,0)'), # Invisibles pero clicables
+                        hoverinfo='skip'
+                    ))
+
+                    # Capa 2: Texto visible
                     fig_cloud.add_trace(go.Scatter(
                         x=df_cloud['x'], y=df_cloud['y'],
                         mode='text',
                         text=df_cloud['word'],
                         textfont=dict(
-                            size=df_cloud['size'] * 0.9,
-                            color=df_cloud['color'], # <--- COLOR DEL DATAFRAME, NO EL DE LA LIBRERÍA
+                            size=df_cloud['size'] * 0.9, # Ajuste de escala
+                            color=df_cloud['color'], 
                             family="Arial Black"
                         ),
                         hoverinfo='text',
@@ -180,47 +217,55 @@ if uploaded_file is not None:
                     
                     fig_cloud.update_layout(
                         xaxis=dict(visible=False), yaxis=dict(visible=False),
-                        hovermode='closest', plot_bgcolor='white', height=650,
-                        margin=dict(l=0, r=0, t=0, b=0), dragmode=False
+                        hovermode='closest', plot_bgcolor='white', 
+                        height=600, # Altura del contenedor visual
+                        margin=dict(l=0, r=0, t=0, b=0), 
+                        dragmode='zoom', # Configuración estándar
+                        showlegend=False
                     )
 
+                    # Interacción Nube
                     event_cloud = st.plotly_chart(fig_cloud, use_container_width=True, on_select="rerun", key="cloud_chart")
+                    
+                    # Lógica de Captura Nube
                     if event_cloud and event_cloud['selection']['points']:
                         idx = event_cloud['selection']['points'][0]['point_index']
+                        # Validamos índice
                         if idx < len(df_cloud):
-                            candidate = df_cloud.iloc[idx]['word']
-                            if candidate != st.session_state['selected_word']:
-                                st.session_state['selected_word'] = candidate
+                            new_word_cloud = df_cloud.iloc[idx]['word']
+                            st.session_state['selected_word'] = new_word_cloud
 
-                # SECCIÓN KWIC
+                # --- C. SECCIÓN KWIC (TABLA) ---
                 st.markdown("---")
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 
-                if st.session_state['selected_word']:
-                    word = st.session_state['selected_word']
-                    
-                    st.markdown(f"""
-                    <div style="background-color:#e6f3ff; padding:15px; border-radius:10px; margin-bottom:20px; border-left: 5px solid #2980b9;">
-                        <h4 style="margin:0; color:#2c3e50;">
-                            Resultados para el término: <span style="font-size:1.3em; color:#d35400;">{word}</span>
-                        </h4>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    mask = df['str_processed'].str.contains(word, case=False, na=False)
-                    resul = df[mask]
-                    
-                    if len(resul) > 0:
-                        st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
-                    else:
-                        st.warning("No se encontraron coincidencias exactas.")
+                # Siempre mostramos algo porque selected_word tiene valor por defecto
+                current_word = st.session_state['selected_word']
                 
-                st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 6px solid #ff4b4b; margin-bottom:20px;">
+                    <h4 style="margin:0; color:#333;">
+                        Término analizado: <span style="font-size:1.4em; color:#ff4b4b;">{current_word}</span>
+                    </h4>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Filtrar DataFrame
+                mask = df['str_processed'].str.contains(current_word, case=False, na=False)
+                resul = df[mask]
+                
+                if len(resul) > 0:
+                    st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
+                else:
+                    st.warning(f"No se encontraron contextos exactos para '{current_word}'.")
+
+                st.markdown("<br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 2: REDES ---
             with tab2:
                 st.subheader("Red de Co-ocurrencia")
-                vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_map.get(lang_opt, 'spanish')))
+                lang_code = lang_map.get(lang_opt, 'spanish')
+                vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code))
                 try:
                     X_net = vectorizer_net.fit_transform(df['str_processed'])
                     adj = (X_net.T * X_net)
@@ -228,17 +273,18 @@ if uploaded_file is not None:
                     df_cooc = pd.DataFrame(adj.toarray(), index=vectorizer_net.get_feature_names_out(), columns=vectorizer_net.get_feature_names_out())
                     G = nx.from_pandas_adjacency(df_cooc)
                     
+                    # Filtro visual para limpiar la red
                     edges_del = [(u,v) for u,v,d in G.edges(data=True) if d['weight'] < 2]
                     G.remove_edges_from(edges_del)
                     G.remove_nodes_from(list(nx.isolates(G)))
                     
                     fig_net, ax_net = plt.subplots(figsize=(12,8))
-                    pos = nx.spring_layout(G, k=0.6)
-                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1200, font_size=11, ax=ax_net)
+                    pos = nx.spring_layout(G, k=0.5, iterations=50) # Iteraciones para mejor distribución
+                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1500, font_size=10, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
-                    st.warning(f"No hay suficientes datos para generar la red: {e}")
-                st.markdown("<br><br><br>", unsafe_allow_html=True)
+                    st.warning(f"Se necesitan más datos para generar la red: {e}")
+                st.markdown("<br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 3: SENTIMIENTOS ---
             with tab3:
@@ -250,7 +296,7 @@ if uploaded_file is not None:
                     cat_sel = st.selectbox("Cruzar con variable:", cat_cols)
                     fig_b = px.box(df, x=cat_sel, y='polaridad', color=cat_sel, title="Polaridad por Categoría")
                     st.plotly_chart(fig_b, use_container_width=True)
-                st.markdown("<br><br><br>", unsafe_allow_html=True)
+                st.markdown("<br><br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
