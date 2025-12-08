@@ -66,7 +66,6 @@ def get_significance_stars(p_value):
     if p_value < 0.05:  return "*"
     return "NS"
 
-# Algoritmo simplificado de MTLD (Measure of Textual Lexical Diversity)
 def calculate_mtld(tokens, threshold=0.72):
     def count_factors(token_list):
         factors = 0
@@ -82,13 +81,11 @@ def calculate_mtld(tokens, threshold=0.72):
                 length = 0
                 word_set = set()
                 ttr = 1.0
-        # Ajuste para el remanente (Interpolación)
         if length > 0:
             factors += (1 - ttr) / (1 - threshold)
         return factors
 
     if not tokens: return 0
-    # Promedio bidireccional (Forward + Backward)
     f_forward = count_factors(tokens)
     f_backward = count_factors(tokens[::-1])
     factor_avg = (f_forward + f_backward) / 2
@@ -162,7 +159,7 @@ if uploaded_file is not None:
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS ACTUALIZADAS ---
+            # --- PESTAÑAS ---
             tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud entre vocabularios", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- 1. FRECUENCIA ---
@@ -239,7 +236,6 @@ if uploaded_file is not None:
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # 1. VISUAL
                     st.subheader("1. Representación Visual")
                     fig_heat = px.imshow(
                         observed,
@@ -254,9 +250,16 @@ if uploaded_file is not None:
                     fig_heat.update_yaxes(tickfont=dict(size=14), tickmode='linear', dtick=1)
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
-                    # 2. TABLA
                     st.markdown("---")
                     st.subheader("2. Tabla de Estadísticos y Significación")
+                    
+                    # --- COMENTARIO EXPLICATIVO (AYUDA) ---
+                    st.info("""
+                    **Guía de Interpretación:** Esta tabla permite identificar **especificidades léxicas**.
+                    * **Frecuencia:** Número de veces que el grupo usa la palabra.
+                    * **Valor-p:** Indica si la asociación es estadísticamente significativa.
+                    * **Sig. (Estrellas):** `***` (Muy significativo), `**`, `*`. Si aparece `NS`, el uso de la palabra es homogéneo y no depende de esta categoría.
+                    """)
                     
                     chi2, p_global, dof, expected = chi2_contingency(observed)
                     residuals = (observed - expected) / np.sqrt(expected)
@@ -278,14 +281,12 @@ if uploaded_file is not None:
                             })
                     
                     df_stats = pd.DataFrame(stats_data)
-                    st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
                     
-                    # CORRECCIÓN SOLICITADA: Tabla concentrada, NO usa todo el ancho
                     st.dataframe(
                         df_stats, 
-                        use_container_width=False, # <-- CAMBIO CLAVE: NO OCUPA TODO EL ANCHO
+                        use_container_width=False,
                         height=400,
-                        width=800, # Anchura fija óptima
+                        width=800,
                         column_config={
                             "Categoría": st.column_config.TextColumn("Categoría", width="small"),
                             "Término": st.column_config.TextColumn("Término", width="medium"),
@@ -300,10 +301,9 @@ if uploaded_file is not None:
 
             # --- 3. SIMILITUD ENTRE VOCABULARIOS ---
             with tab3:
-                # Selector de variable para TODA la pestaña
                 cat_vocab = st.selectbox("Comparar grupos de la variable:", cat_cols, key='vocab_cat')
                 
-                # --- PARTE A: JACCARD ---
+                # JACCARD
                 st.subheader("1. Matriz de Similitud (Jaccard)")
                 st.markdown("Mide qué tanto se parece el vocabulario entre grupos (0.0 = Nada, 1.0 = Idéntico).")
                 
@@ -336,7 +336,6 @@ if uploaded_file is not None:
                     range_color=[0, 1],
                     title=f"Similitud Jaccard: {cat_vocab}"
                 )
-                
                 fig_j.update_layout(
                     height=500,
                     xaxis=dict(tickmode='linear', dtick=1, side="top"),
@@ -344,36 +343,33 @@ if uploaded_file is not None:
                 )
                 fig_j.update_xaxes(tickfont=dict(size=14))
                 fig_j.update_yaxes(tickfont=dict(size=14))
-                
                 st.plotly_chart(fig_j, use_container_width=True)
 
-                # --- PARTE B: DIVERSIDAD LÉXICA ---
+                # DIVERSIDAD
                 st.markdown("---")
                 st.subheader("2. Métricas de Diversidad Léxica")
-                st.markdown("""
-                Comparación de la riqueza del vocabulario por categoría.
-                - **TTR (Type-Token Ratio):** Riqueza básica (Palabras únicas / Total). *Sensible a longitud.*
-                - **Raíz de Guiraud:** (Palabras únicas / √Total). *Más robusta.*
-                - **MTLD:** (Measure of Textual Lexical Diversity). *La medida más sofisticada y estable.*
+                
+                # --- COMENTARIO EXPLICATIVO (AYUDA) ---
+                st.info("""
+                **Interpretación de la Riqueza Léxica:**
+                * **TTR (Type-Token Ratio):** Porcentaje de palabras únicas. *Tiende a bajar en textos muy largos.*
+                * **MTLD:** La métrica más robusta. Mide qué tanto se puede extender el texto sin repetir vocabulario excesivamente. **Valores más altos indican un lenguaje más rico y variado.**
                 """)
                 
                 diversity_data = []
                 for cat, list_of_lists in df_grouped.items():
-                    # Unir todos los tokens de la categoría en una sola lista larga
                     flat_tokens = [item for sublist in list_of_lists for item in sublist]
-                    
                     n_tokens = len(flat_tokens)
                     n_types = len(set(flat_tokens))
                     
-                    # Cálculo Métricas
                     ttr = n_types / n_tokens if n_tokens > 0 else 0
                     guiraud = n_types / np.sqrt(n_tokens) if n_tokens > 0 else 0
                     mtld_val = calculate_mtld(flat_tokens)
                     
                     diversity_data.append({
                         "Categoría": cat,
-                        "Total Palabras (N)": n_tokens,
-                        "Vocabulario Único (V)": n_types,
+                        "Total (N)": n_tokens,
+                        "Únicas (V)": n_types,
                         "TTR": round(ttr, 3),
                         "Guiraud": round(guiraud, 2),
                         "MTLD": round(mtld_val, 2)
@@ -381,21 +377,13 @@ if uploaded_file is not None:
                 
                 df_diversity = pd.DataFrame(diversity_data)
                 
-                # Visualización Gráfica Diversidad
                 col_d1, col_d2 = st.columns([1, 1])
-                
                 with col_d1:
-                    # Tabla
                     st.dataframe(df_diversity, use_container_width=True, hide_index=True)
-                
                 with col_d2:
-                    # Gráfico comparativo (MTLD es el mejor para comparar)
                     fig_div = px.bar(
-                        df_diversity, 
-                        x='Categoría', 
-                        y=['MTLD', 'Guiraud'], 
-                        barmode='group',
-                        title="Comparación de Riqueza (MTLD y Guiraud)",
+                        df_diversity, x='Categoría', y=['MTLD', 'Guiraud'], 
+                        barmode='group', title="Comparación de Riqueza",
                         color_discrete_sequence=px.colors.qualitative.Pastel
                     )
                     st.plotly_chart(fig_div, use_container_width=True)
@@ -403,6 +391,16 @@ if uploaded_file is not None:
             # --- 4. REDES ---
             with tab4:
                 st.subheader("Red de Co-ocurrencia")
+                
+                # --- COMENTARIO INTRODUCTORIO ---
+                st.markdown("""
+                **¿Cómo leer este gráfico?**
+                Esta red muestra cómo se conectan las palabras en el discurso.
+                * **Nodos (Círculos):** Representan los términos más frecuentes.
+                * **Líneas:** Conectan palabras que aparecen juntas en la misma respuesta.
+                * **Clústeres:** Los grupos de palabras muy conectadas entre sí sugieren temáticas comunes.
+                """)
+                
                 lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
                 vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code_net))
                 try:
@@ -416,9 +414,10 @@ if uploaded_file is not None:
                     G.remove_edges_from(edges_del)
                     G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    fig_net, ax_net = plt.subplots(figsize=(12,8))
+                    # REDUCCIÓN DE TAMAÑO SOLICITADA (9, 6)
+                    fig_net, ax_net = plt.subplots(figsize=(9, 6))
                     pos = nx.spring_layout(G, k=0.5, seed=42)
-                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1500, font_size=10, ax=ax_net)
+                    nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1200, font_size=9, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
                     st.warning(f"Se necesitan más datos: {e}")
