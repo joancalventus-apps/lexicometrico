@@ -223,15 +223,14 @@ if uploaded_file is not None:
                             obs_val = observed.iloc[i, j]
                             p_val = p_values_matrix[i, j]
                             
-                            # Formato Visual
-                            color_style = "color:black; font-weight:bold" if p_val < 0.05 else "color:#444"
+                            # ESTILOS GIGANTES
+                            color_style = "color:black; font-weight:900" if p_val < 0.05 else "color:#555"
                             
-                            # Construcción HTML
-                            # Usamos <br> para salto de línea
-                            text_cell = f"<span style='font-size:1.6em; font-weight:900'>{obs_val}</span><br><span style='font-size:1.2em; {color_style}'>p={p_val:.3f}</span>"
-                            text_matrix.iloc[i, j] = text_cell
+                            text_matrix.iloc[i, j] = (
+                                f"<span style='font-size:2.2em; font-weight:900'>{obs_val}</span><br>" # Frecuencia Gigante
+                                f"<span style='font-size:1.6em; {color_style}'>p={p_val:.3f}</span>" # P-valor Grande
+                            )
 
-                    # Colores
                     custom_colors = [
                         [0.0, "#FFFFCC"], [0.2, "#FED976"], 
                         [0.4, "#FD8D3C"], [0.6, "#E31A1C"],
@@ -241,31 +240,28 @@ if uploaded_file is not None:
                     # Graficar
                     fig_heat = px.imshow(
                         observed,
-                        text_auto=False, # Importante: False para usar nuestro HTML
+                        text_auto=False, 
                         aspect="auto",
                         color_continuous_scale=custom_colors,
                         labels=dict(x="", y="", color="Frecuencia")
                     )
                     
-                    # Inyección de Texto y Formatos Gigantes
                     fig_heat.update_traces(
                         text=text_matrix, 
                         texttemplate="%{text}",
                         hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
                     )
                     
-                    # Ajustes de Ejes y Leyenda
+                    # Layout para textos GIGANTES
                     fig_heat.update_layout(
-                        height=700,
-                        # Configuración de la Barra de Color (Leyenda)
+                        height=750,
                         coloraxis_colorbar=dict(
-                            title=dict(text="Frecuencia", font=dict(size=20)),
+                            title=dict(text="Frecuencia", font=dict(size=22)), # Leyenda Grande
                             tickfont=dict(size=18),
                             lenmode="fraction", len=0.8
                         )
                     )
                     
-                    # Fuentes de Ejes X e Y
                     fig_heat.update_xaxes(side="top", tickfont=dict(size=20, family="Arial Black"))
                     fig_heat.update_yaxes(tickfont=dict(size=20, family="Arial Black"))
                     
