@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+import plotly.graph_objects as go
 import networkx as nx
 from textblob import TextBlob
 from wordcloud import WordCloud
@@ -16,10 +17,12 @@ from sklearn.cluster import KMeans
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="LexicoMapper Pro", layout="wide")
 
-# --- ESTILOS CSS PERSONALIZADOS (Para maximizar espacio) ---
+# --- ESTILOS CSS ---
+# Ajustes para márgenes y tamaño de fuente extra en tablas
 st.markdown("""
     <style>
-    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    .block-container {padding-top: 1rem; padding-bottom: 5rem;}
+    .stDataFrame {font-size: 1.2rem;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -74,7 +77,6 @@ if uploaded_file is not None:
             df['tokens'] = df['tokens'].apply(lambda tokens: [t for t in tokens if t in valid_words])
             df['str_processed'] = df['tokens'].apply(lambda x: ' '.join(x))
             df['polaridad'] = df[text_col].apply(lambda x: TextBlob(str(x)).sentiment.polarity)
-            
             all_tokens = [token for sublist in df['tokens'] for token in sublist]
 
         if len(all_tokens) == 0:
@@ -99,15 +101,11 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # Colores consistentes
+            # Colores
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
-            word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
-
-            def color_func(word, **kwargs):
-                return word_color_map.get(word, '#888888')
-
+            
             # --- PESTAÑAS ---
             tab1, tab2, tab3 = st.tabs(["📊 Frecuencia & KWIC", "🕸️ Redes", "❤️ Sentimientos"])
 
@@ -115,58 +113,118 @@ if uploaded_file is not None:
             with tab1:
                 col_left, col_right = st.columns([1, 1])
                 
+                # --- GRÁFICO DE BARRAS (IZQUIERDA) ---
                 with col_left:
-                    st.subheader("Top Términos (Interactivo)")
-                    st.caption("🔍 Haz clic en una palabra para ver sus contextos.")
+                    st.subheader("Top Términos")
+                    st.caption("Clic en la barra para filtrar.")
                     
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
                         color='Grupo', text='Frecuencia', color_discrete_map=group_color_map
                     )
                     
-                    # --- MEJORAS VISUALES SOLICITADAS ---
+                    # AUMENTO MASIVO DE FUENTE
                     fig_bar.update_layout(
                         yaxis=dict(
                             categoryorder='total ascending',
-                            tickfont=dict(size=15, color='black', family="Arial") # Letra más grande eje Y
+                            tickfont=dict(size=18, color='black', family="Arial Black") # Eje Y negrita grande
                         ),
+                        xaxis=dict(showticklabels=False),
                         showlegend=False, 
                         height=600,
                         margin=dict(l=0, r=0, t=0, b=0)
                     )
                     fig_bar.update_traces(
                         textposition='outside',
-                        textfont_size=16, # Números más grandes
-                        cliponaxis=False
+                        textfont_size=20, # Número de frecuencia gigante
+                        cliponaxis=False,
+                        width=0.7
                     )
                     
-                    event = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun")
-                    
-                    if event and len(event['selection']['points']) > 0:
-                        st.session_state['selected_word'] = event['selection']['points'][0]['y']
+                    # Interacción Barras
+                    event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
+                    if event_bar and len(event_bar['selection']['points']) > 0:
+                        st.session_state['selected_word'] = event_bar['selection']['points'][0]['y']
 
+                # --- NUBE DE PALABRAS INTERACTIVA (DERECHA) ---
                 with col_right:
-                    st.subheader("Nube Semántica")
-                    wc = WordCloud(
-                        width=800, height=600, 
-                        background_color='white', 
-                        max_words=top_n, 
-                        color_func=color_func,
-                        prefer_horizontal=0.9
-                    ).generate_from_frequencies(dict(common_words))
+                    st.subheader("Nube Semántica (Clicable)")
+                    st.caption("Clic en una palabra de la nube para filtrar.")
                     
-                    fig_wc, ax = plt.subplots(figsize=(8,6))
-                    ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
-                    st.pyplot(fig_wc)
+                    # 1. Calculamos posiciones usando WordCloud (sin dibujar)
+                    wc = WordCloud(width=600, height=600, max_words=top_n).generate_from_frequencies(dict(common_words))
+                    
+                    # 2. Extraemos coordenadas y creamos un DataFrame para Plotly
+                    word_list = []
+                    # wc.layout_ contiene: ((word, freq), font_size, position, orientation, color)
+                    for (word, freq), font_size, position, orientation, color in wc.layout_:
+                        # Ajustamos coordenadas para centrar
+                        x_pos = position[1]
+                        y_pos = -position[0] # Invertir eje Y porque las imágenes van de arriba a abajo
+                        
+                        # Asignamos color según grupo semántico
+                        grp = word_to_cluster.get(word, '0')
+                        color_code = group_color_map.get(grp, '#888')
+                        
+                        word_list.append({
+                            'word': word, 'x': x_pos, 'y': y_pos, 
+                            'size': font_size, 'freq': freq, 'color': color_code
+                        })
+                    
+                    df_cloud_plot = pd.DataFrame(word_list)
+                    
+                    # 3. Dibujamos con Plotly Scatter (Texto)
+                    fig_cloud = go.Figure()
+                    
+                    # Añadimos las palabras como texto en coordenadas específicas
+                    fig_cloud.add_trace(go.Scatter(
+                        x=df_cloud_plot['x'],
+                        y=df_cloud_plot['y'],
+                        mode='text',
+                        text=df_cloud_plot['word'],
+                        textfont=dict(
+                            size=df_cloud_plot['size'] * 0.8, # Factor de escala visual
+                            color=df_cloud_plot['color'],
+                            family="Arial Black"
+                        ),
+                        hoverinfo='text',
+                        hovertext=[f"{w}: {f}" for w, f in zip(df_cloud_plot['word'], df_cloud_plot['freq'])]
+                    ))
+                    
+                    fig_cloud.update_layout(
+                        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                        hovermode='closest',
+                        plot_bgcolor='white',
+                        height=600,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        dragmode=False # Desactivar zoom para evitar movimientos raros
+                    )
 
-                # --- SECCIÓN KWIC AUTOMÁTICA ---
+                    # Interacción Nube
+                    event_cloud = st.plotly_chart(fig_cloud, use_container_width=True, on_select="rerun", key="cloud_chart")
+                    
+                    # Detectar clic en la nube
+                    if event_cloud and len(event_cloud['selection']['points']) > 0:
+                        # En scatter trace, 'text' contiene la palabra
+                        idx = event_cloud['selection']['points'][0]['point_index']
+                        clicked_word_cloud = df_cloud_plot.iloc[idx]['word']
+                        st.session_state['selected_word'] = clicked_word_cloud
+
+                # --- SECCIÓN KWIC ---
                 st.divider()
-                # Zona de anclaje visual
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 
                 if st.session_state['selected_word']:
                     word = st.session_state['selected_word']
-                    st.markdown(f"Mostrando concordancias para: **<span style='color:blue; font-size:1.2em'>{word}</span>**", unsafe_allow_html=True)
+                    # Usamos HTML para resaltar grande la palabra seleccionada
+                    st.markdown(f"""
+                    <div style="background-color:#f0f2f6; padding:15px; border-radius:10px; margin-bottom:20px;">
+                        <h3 style="margin:0; color:#31333F;">
+                            Concordancias para: <span style="color:#ff4b4b; text-decoration:underline;">{word}</span>
+                        </h3>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     mask = df['str_processed'].str.contains(word, case=False, na=False)
                     resul = df[mask]
@@ -178,9 +236,12 @@ if uploaded_file is not None:
                             hide_index=True
                         )
                     else:
-                        st.warning("No se encontraron coincidencias.")
+                        st.warning("No se encontraron coincidencias exactas.")
                 else:
-                    st.info("👈 Haz clic en cualquier palabra del gráfico de barras para leer aquí las frases donde aparece.")
+                    st.info("👈 Haz clic en una BARRA o en una PALABRA DE LA NUBE para ver los resultados aquí.")
+
+                # ESPACIO FINAL EXTRA (MARGEN)
+                st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 2: REDES ---
             with tab2:
@@ -197,12 +258,13 @@ if uploaded_file is not None:
                     G.remove_edges_from(edges_del)
                     G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    fig_net, ax_net = plt.subplots(figsize=(12,8)) # Red más grande
+                    fig_net, ax_net = plt.subplots(figsize=(12,8))
                     pos = nx.spring_layout(G, k=0.6)
                     nx.draw(G, pos, with_labels=True, node_color='#aaddff', edge_color='#cccccc', node_size=1200, font_size=11, ax=ax_net)
                     st.pyplot(fig_net)
                 except Exception as e:
                     st.warning(f"No hay suficientes datos: {e}")
+                st.markdown("<br><br><br>", unsafe_allow_html=True)
 
             # --- PESTAÑA 3: SENTIMIENTOS ---
             with tab3:
@@ -214,6 +276,7 @@ if uploaded_file is not None:
                     cat_sel = st.selectbox("Variable Categórica:", cat_cols)
                     fig_b = px.box(df, x=cat_sel, y='polaridad', color=cat_sel)
                     st.plotly_chart(fig_b, use_container_width=True)
+                st.markdown("<br><br><br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error general: {e}")
