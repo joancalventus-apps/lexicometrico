@@ -17,12 +17,14 @@ from sklearn.feature_extraction.text import CountVectorizer
 # Configuración de página
 st.set_page_config(page_title="LexicoMapper", layout="wide")
 
-# Descargar recursos de NLTK necesarios (se ejecuta una vez)
+# --- CONFIGURACIÓN NLTK (Corrección del error punkt_tab) ---
 try:
     nltk.data.find('tokenizers/punkt')
+    nltk.data.find('tokenizers/punkt_tab')
     nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('punkt')
+    nltk.download('punkt_tab')
     nltk.download('stopwords')
 
 # --- FUNCIONES AUXILIARES ---
