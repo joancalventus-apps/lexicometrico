@@ -64,13 +64,9 @@ lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
 st.sidebar.markdown("---")
 st.sidebar.header("2. Filtros y Limpieza")
 
-# 1. Frecuencia Mínima
 min_freq_filter = st.sidebar.slider("Seleccione Frecuencia mínima de aparición:", 1, 50, 2)
-
-# 2. Exclusión de palabras
 custom_stopwords_input = st.sidebar.text_area("Excluir palabras (separar por coma):", placeholder="ej: respuesta, ns, nc")
 custom_stopwords_list = [x.strip().lower() for x in custom_stopwords_input.split(',')] if custom_stopwords_input else []
-
 
 if uploaded_file is not None:
     try:
@@ -93,19 +89,19 @@ if uploaded_file is not None:
         if len(all_tokens) == 0:
             st.error("No hay palabras suficientes con los filtros actuales.")
         else:
-            # --- CÁLCULOS GENERALES ---
+            # --- CÁLCULOS ---
             freq_dist = Counter(all_tokens)
             top_n = 40
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # Default Selection KWIC
+            # Default Selection
             available_words = set(df_freq['Término'])
             if st.session_state['selected_word'] is None or st.session_state['selected_word'] not in available_words:
                 if not df_freq.empty:
                     st.session_state['selected_word'] = df_freq.iloc[0]['Término']
 
-            # Clustering Semántico
+            # Clustering
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -130,7 +126,7 @@ if uploaded_file is not None:
             # --- PESTAÑAS ---
             tab1, tab2, tab3, tab4 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🕸️ Redes", "❤️ Sentimientos"])
 
-            # --- PESTAÑA 1: FRECUENCIA & KWIC ---
+            # --- 1. FRECUENCIA ---
             with tab1:
                 col_left, col_right = st.columns([1.2, 0.8])
                 
@@ -151,27 +147,19 @@ if uploaded_file is not None:
                     
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
                     if event_bar and event_bar['selection']['points']:
-                        new_word = event_bar['selection']['points'][0]['y']
-                        st.session_state['selected_word'] = new_word
+                        st.session_state['selected_word'] = event_bar['selection']['points'][0]['y']
 
                 with col_right:
                     st.subheader("Nube Semántica")
-                    # Nube visual comprimida
                     wc = WordCloud(
-                        width=500, height=500, 
-                        background_color='white', 
-                        max_words=top_n, 
-                        color_func=color_func, 
-                        prefer_horizontal=1.0, 
-                        relative_scaling=0, 
-                        margin=0, 
-                        min_font_size=8
+                        width=500, height=500, background_color='white', 
+                        max_words=top_n, color_func=color_func, 
+                        prefer_horizontal=1.0, relative_scaling=0, margin=0, min_font_size=8
                     ).generate_from_frequencies(dict(common_words))
                     
                     fig_wc, ax = plt.subplots(figsize=(6,6))
-                    ax.imshow(wc, interpolation='bilinear')
-                    ax.axis('off') 
-                    plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, hspace = 0, wspace = 0)
+                    ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
+                    plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
                     st.pyplot(fig_wc)
 
                 # KWIC
@@ -199,9 +187,8 @@ if uploaded_file is not None:
                         st.dataframe(resul[[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
                     else:
                         st.warning(f"No se encontraron coincidencias para '{current_word}'.")
-                st.markdown("<br><br>", unsafe_allow_html=True)
 
-            # --- PESTAÑA 2: MAPA DE CALOR ESTADÍSTICO ---
+            # --- 2. MAPA DE CALOR ---
             with tab2:
                 cat_heatmap = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
                 
@@ -209,75 +196,84 @@ if uploaded_file is not None:
                 
                 with st.expander("¿Cómo interpretar los valores del mapa de calor?"):
                     st.markdown("""
-                    Esta tabla muestra qué tan relevante es una palabra para cada grupo.
-                    1. **Número Grande (Frecuencia):** Cuántas veces aparece la palabra en este grupo.
-                    2. **Valor-p (Probabilidad):** Indica si esta frecuencia es "normal" o "extraordinaria".
-                       - **p < 0.050:** Es estadísticamente significativo. El uso de la palabra no es casualidad.
-                       - **p > 0.050:** Es un uso normal, dentro del promedio.
+                    1. **Número Grande:** Frecuencia absoluta (cuántas veces aparece).
+                    2. **p:** Probabilidad estadística.
+                       - **p < 0.050:** Diferencia significativa (Relevante).
+                       - **p > 0.050:** Dentro de lo normal.
                     """)
                 
-                # 1. Preparar Matriz
                 df_exploded = df.explode('tokens')
                 top_words_list = df_freq['Término'].head(20).tolist()
                 df_heatmap_filtered = df_exploded[df_exploded['tokens'].isin(top_words_list)]
                 
                 if not df_heatmap_filtered.empty:
+                    # Cálculo Observados
                     observed = pd.crosstab(df_heatmap_filtered[cat_heatmap], df_heatmap_filtered['tokens'])
                     
-                    # 2. Cálculo Estadístico
+                    # Cálculo Estadístico
                     chi2, p_global, dof, expected = chi2_contingency(observed)
                     residuals = (observed - expected) / np.sqrt(expected)
-                    
-                    # CORRECCIÓN DE ERROR: Convertimos explícitamente a array de numpy
                     p_values_matrix = np.array(2 * (1 - norm.cdf(abs(residuals))))
                     
-                    # 4. Construir Matriz de Texto
-                    text_matrix = observed.copy().astype(object)
+                    # Construcción Matriz Texto (IMPORTANTE: Inicializar vacío)
+                    text_matrix = pd.DataFrame(index=observed.index, columns=observed.columns)
                     
                     for i in range(len(observed)):
                         for j in range(len(observed.columns)):
                             obs_val = observed.iloc[i, j]
-                            # CORRECCIÓN: Usamos [i, j] porque es un array, no iloc
-                            p_val = p_values_matrix[i, j] 
+                            p_val = p_values_matrix[i, j]
                             
-                            sig_style = "font-weight:bold; color:black;" if p_val < 0.05 else "color:#444;"
+                            # Formato Visual
+                            color_style = "color:black; font-weight:bold" if p_val < 0.05 else "color:#444"
                             
-                            text_matrix.iloc[i, j] = (
-                                f"<span style='font-size:1.4em; font-weight:bold'>{obs_val}</span><br>"
-                                f"<span style='font-size:1.1em; {sig_style}'>p: {p_val:.3f}</span>"
-                            )
+                            # Construcción HTML
+                            # Usamos <br> para salto de línea
+                            text_cell = f"<span style='font-size:1.6em; font-weight:900'>{obs_val}</span><br><span style='font-size:1.2em; {color_style}'>p={p_val:.3f}</span>"
+                            text_matrix.iloc[i, j] = text_cell
 
-                    # Colores: Amarillo -> Naranja -> Rojo -> Granate
+                    # Colores
                     custom_colors = [
                         [0.0, "#FFFFCC"], [0.2, "#FED976"], 
                         [0.4, "#FD8D3C"], [0.6, "#E31A1C"],
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # 6. Graficar Heatmap
+                    # Graficar
                     fig_heat = px.imshow(
                         observed,
-                        text_auto=False,
+                        text_auto=False, # Importante: False para usar nuestro HTML
                         aspect="auto",
                         color_continuous_scale=custom_colors,
                         labels=dict(x="", y="", color="Frecuencia")
                     )
                     
+                    # Inyección de Texto y Formatos Gigantes
                     fig_heat.update_traces(
                         text=text_matrix, 
                         texttemplate="%{text}",
                         hovertemplate="Palabra: %{x}<br>Categoría: %{y}<br>Frecuencia: %{z}<extra></extra>"
                     )
                     
-                    fig_heat.update_layout(height=650, font=dict(size=14))
-                    fig_heat.update_xaxes(side="top", tickfont=dict(size=16, family="Arial Black"))
-                    fig_heat.update_yaxes(tickfont=dict(size=16, family="Arial Black"))
+                    # Ajustes de Ejes y Leyenda
+                    fig_heat.update_layout(
+                        height=700,
+                        # Configuración de la Barra de Color (Leyenda)
+                        coloraxis_colorbar=dict(
+                            title=dict(text="Frecuencia", font=dict(size=20)),
+                            tickfont=dict(size=18),
+                            lenmode="fraction", len=0.8
+                        )
+                    )
+                    
+                    # Fuentes de Ejes X e Y
+                    fig_heat.update_xaxes(side="top", tickfont=dict(size=20, family="Arial Black"))
+                    fig_heat.update_yaxes(tickfont=dict(size=20, family="Arial Black"))
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- PESTAÑA 3: REDES ---
+            # --- 3. REDES ---
             with tab3:
                 st.subheader("Red de Co-ocurrencia")
                 lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
@@ -300,7 +296,7 @@ if uploaded_file is not None:
                 except Exception as e:
                     st.warning(f"Se necesitan más datos: {e}")
 
-            # --- PESTAÑA 4: SENTIMIENTOS ---
+            # --- 4. SENTIMIENTOS ---
             with tab4:
                 c1, c2 = st.columns(2)
                 with c1:
