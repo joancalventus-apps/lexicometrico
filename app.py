@@ -20,7 +20,7 @@ st.set_page_config(page_title="Lexicométrico", layout="wide")
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
-    .stDataFrame {font-size: 1.1rem;}
+    .stDataFrame {font-size: 1.0rem;} /* Letra un poco más compacta en tablas */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -130,7 +130,7 @@ if uploaded_file is not None:
             def color_func(word, **kwargs):
                 return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS (Ahora son 5) ---
+            # --- PESTAÑAS ---
             tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud (Jaccard)", "🕸️ Redes", "❤️ Sentimientos"])
 
             # --- 1. FRECUENCIA ---
@@ -216,7 +216,7 @@ if uploaded_file is not None:
                         [0.8, "#800026"], [1.0, "#4A0012"]
                     ]
 
-                    # 1. VISUAL
+                    # 1. VISUAL (Gráfica limpia)
                     st.subheader("1. Representación Visual")
                     fig_heat = px.imshow(
                         observed,
@@ -232,7 +232,7 @@ if uploaded_file is not None:
                     
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
-                    # 2. TABLA ESTADÍSTICA
+                    # 2. TABLA ESTADÍSTICA (Concentrada y Compacta)
                     st.markdown("---")
                     st.subheader("2. Tabla de Estadísticos y Significación")
                     
@@ -257,39 +257,38 @@ if uploaded_file is not None:
                     
                     df_stats = pd.DataFrame(stats_data)
                     st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
+                    
+                    # CONFIGURACIÓN COMPACTA (height=400 + anchos definidos)
                     st.dataframe(
                         df_stats, 
                         use_container_width=True,
+                        height=400, # Altura fija para concentrar la vista
                         column_config={
-                            "Frecuencia": st.column_config.NumberColumn("Frecuencia", format="%d"),
+                            "Categoría": st.column_config.TextColumn("Categoría", width="small"),
+                            "Término": st.column_config.TextColumn("Término", width="medium"),
+                            "Frecuencia": st.column_config.NumberColumn("Frec.", width="small"),
+                            "Valor-p": st.column_config.TextColumn("p-val", width="small"), 
+                            "Sig.": st.column_config.TextColumn("Sig.", width="small")
                         },
                         hide_index=True
                     )
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- 3. SIMILITUD JACCARD (NUEVA PESTAÑA) ---
+            # --- 3. SIMILITUD JACCARD (EJES LIMPIOS) ---
             with tab3:
                 st.subheader("Análisis de Similitud de Vocabulario (Jaccard)")
-                st.markdown("""
-                Este análisis compara el vocabulario completo de los grupos. 
-                - **1.0 (Azul oscuro):** Vocabulario idéntico.
-                - **0.0 (Blanco):** No comparten ninguna palabra.
-                """)
+                st.markdown("Comparación de vocabulario compartido entre grupos (1.0 = Idéntico).")
                 
                 cat_jaccard = st.selectbox("Comparar grupos de la variable:", cat_cols, key='jaccard_cat')
                 
-                # Agrupar vocabulario por categoría
-                # Concatenamos todos los tokens de cada grupo en un set único
                 df_grouped = df.groupby(cat_jaccard)['tokens'].apply(list)
                 
                 group_vocab = {}
                 for cat, list_of_lists in df_grouped.items():
-                    # Aplanar lista de listas y convertir a set único
                     flat_list = [item for sublist in list_of_lists for item in sublist]
                     group_vocab[cat] = set(flat_list)
                 
-                # Crear matriz de Jaccard
                 groups = sorted(list(group_vocab.keys()))
                 size = len(groups)
                 jaccard_matrix = np.zeros((size, size))
@@ -301,25 +300,36 @@ if uploaded_file is not None:
                         else:
                             set_a = group_vocab[groups[i]]
                             set_b = group_vocab[groups[j]]
-                            
                             intersection = len(set_a.intersection(set_b))
                             union = len(set_a.union(set_b))
-                            
                             jaccard_matrix[i, j] = intersection / union if union > 0 else 0
                 
-                # Graficar Matriz
                 fig_j = px.imshow(
                     jaccard_matrix,
                     x=groups,
                     y=groups,
-                    text_auto='.2f', # Mostrar valor con 2 decimales
+                    text_auto='.2f',
                     color_continuous_scale='Blues',
-                    range_color=[0, 1], # Forzar escala 0 a 1
+                    range_color=[0, 1],
                     title=f"Matriz de Similitud: {cat_jaccard}"
                 )
                 
-                fig_j.update_layout(height=600)
-                fig_j.update_xaxes(side="top", tickfont=dict(size=14))
+                # EJES LIMPIOS: Solo mostrar las categorías, sin ticks numéricos extra
+                fig_j.update_layout(
+                    height=600,
+                    xaxis = dict(
+                        tickmode = 'array',
+                        tickvals = np.arange(len(groups)),
+                        ticktext = groups,
+                        side="top"
+                    ),
+                    yaxis = dict(
+                        tickmode = 'array',
+                        tickvals = np.arange(len(groups)),
+                        ticktext = groups
+                    )
+                )
+                fig_j.update_xaxes(tickfont=dict(size=14))
                 fig_j.update_yaxes(tickfont=dict(size=14))
                 
                 st.plotly_chart(fig_j, use_container_width=True)
