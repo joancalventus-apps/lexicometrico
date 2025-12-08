@@ -17,22 +17,18 @@ from scipy.stats import chi2_contingency, norm
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
 
-# --- INYECCIÓN CSS (ESTILOS) ---
+# --- INYECCIÓN CSS ---
 st.markdown("""
     <style>
-    /* Ajuste de márgenes generales */
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
     
-    /* 1. AUMENTAR TAMAÑO ETIQUETAS DE PESTAÑAS (TABS) */
+    /* TAMAÑO ETIQUETAS PESTAÑAS */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
         font-size: 1.3rem;
         font-weight: 600;
     }
     
-    /* Ajuste de fuente en tablas */
     .stDataFrame {font-size: 1.0rem;}
-    
-    /* Ocultar elementos de Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -113,13 +109,11 @@ if uploaded_file is not None:
             common_words = freq_dist.most_common(top_n)
             df_freq = pd.DataFrame(common_words, columns=['Término', 'Frecuencia'])
             
-            # Default Selection
             available_words = set(df_freq['Término'])
             if st.session_state['selected_word'] is None or st.session_state['selected_word'] not in available_words:
                 if not df_freq.empty:
                     st.session_state['selected_word'] = df_freq.iloc[0]['Término']
 
-            # Clustering
             if len(df_freq) > 5:
                 vectorizer = TfidfVectorizer(vocabulary=df_freq['Término'].values)
                 X = vectorizer.fit_transform(df['str_processed'])
@@ -132,7 +126,6 @@ if uploaded_file is not None:
                 df_freq['Grupo'] = '0'
                 word_to_cluster = {w: '0' for w in df_freq['Término']}
 
-            # Colores
             palette = px.colors.qualitative.Bold 
             unique_groups = sorted(df_freq['Grupo'].unique())
             group_color_map = {grp: palette[i % len(palette)] for i, grp in enumerate(unique_groups)}
@@ -147,11 +140,9 @@ if uploaded_file is not None:
             # --- 1. FRECUENCIA ---
             with tab1:
                 col_left, col_right = st.columns([1.2, 0.8])
-                
                 with col_left:
                     st.subheader("Glosario de términos más utilizados")
                     st.markdown("**Haz clic en una barra para mostrar el contexto:**")
-                    
                     fig_bar = px.bar(
                         df_freq, x='Frecuencia', y='Término', orientation='h', 
                         color='Grupo', text='Frecuencia', color_discrete_map=group_color_map
@@ -162,7 +153,6 @@ if uploaded_file is not None:
                         showlegend=False, height=650, margin=dict(l=0, r=0, t=0, b=0)
                     )
                     fig_bar.update_traces(textposition='outside', textfont_size=18, cliponaxis=False, width=0.7)
-                    
                     event_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun", key="bar_chart")
                     if event_bar and event_bar['selection']['points']:
                         st.session_state['selected_word'] = event_bar['selection']['points'][0]['y']
@@ -174,20 +164,16 @@ if uploaded_file is not None:
                         max_words=top_n, color_func=color_func, 
                         prefer_horizontal=1.0, relative_scaling=0, margin=0, min_font_size=8
                     ).generate_from_frequencies(dict(common_words))
-                    
                     fig_wc, ax = plt.subplots(figsize=(6,6))
                     ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
                     plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
                     st.pyplot(fig_wc)
 
-                # KWIC
                 st.markdown("---")
                 st.markdown("### 📝 Análisis de Contexto (KWIC)")
-                
                 col_search, col_info = st.columns([1, 3])
                 with col_search:
                      manual_search = st.text_input("🔍 O escribe una palabra aquí:", value="")
-                
                 current_word = manual_search if manual_search else st.session_state['selected_word']
 
                 st.markdown(f"""
@@ -229,21 +215,33 @@ if uploaded_file is not None:
 
                     # 1. VISUAL
                     st.subheader("1. Representación Visual")
+                    
+                    # Aseguramos que 'y' sea la variable seleccionada explícitamente
                     fig_heat = px.imshow(
                         observed,
                         text_auto=False,
                         aspect="auto",
                         color_continuous_scale=custom_colors,
-                        labels=dict(x="", y="", color="Frecuencia")
+                        labels=dict(x="", y=cat_heatmap, color="Frecuencia") # <--- ETIQUETA EJE Y CORRECTA
                     )
                     
-                    fig_heat.update_layout(height=500)
+                    fig_heat.update_layout(
+                        height=500,
+                        # Asegurar que el título del eje Y sea visible
+                        yaxis_title=cat_heatmap 
+                    )
+                    
                     fig_heat.update_xaxes(side="top", tickfont=dict(size=14))
-                    fig_heat.update_yaxes(tickfont=dict(size=14))
+                    # Forzar que solo aparezcan las categorías (sin números intermedios)
+                    fig_heat.update_yaxes(
+                        tickfont=dict(size=14),
+                        tickmode='linear', 
+                        dtick=1
+                    )
+                    
                     st.plotly_chart(fig_heat, use_container_width=True)
                     
-                    # 2. TABLA ESTADÍSTICA (Ajustada y Concentrada)
-                    # Usamos columnas para centrar la tabla y evitar que se expanda demasiado
+                    # 2. TABLA
                     st.markdown("---")
                     st.subheader("2. Tabla de Estadísticos y Significación")
                     
@@ -269,11 +267,10 @@ if uploaded_file is not None:
                     df_stats = pd.DataFrame(stats_data)
                     st.caption("Nota: NS = No Significativo (>0.05); * p<0.05; ** p<0.01; *** p<0.001")
                     
-                    # Tabla concentrada
                     st.dataframe(
                         df_stats, 
                         use_container_width=True,
-                        height=350, # Altura reducida para concentrar la información
+                        height=400,
                         column_config={
                             "Categoría": st.column_config.TextColumn("Categoría", width="small"),
                             "Término": st.column_config.TextColumn("Término", width="medium"),
@@ -286,7 +283,7 @@ if uploaded_file is not None:
                 else:
                     st.warning("No hay suficientes datos cruzados para generar el mapa.")
 
-            # --- 3. SIMILITUD JACCARD ---
+            # --- 3. JACCARD ---
             with tab3:
                 st.subheader("Análisis de Similitud de Vocabulario (Jaccard)")
                 st.markdown("Comparación de vocabulario compartido entre grupos (1.0 = Idéntico).")
@@ -325,18 +322,10 @@ if uploaded_file is not None:
                     title=f"Matriz de Similitud: {cat_jaccard}"
                 )
                 
-                # CORRECCIÓN DE ETIQUETAS JACCARD: Forzar mostrar todas
                 fig_j.update_layout(
                     height=600,
-                    xaxis = dict(
-                        tickmode = 'linear', # Forzar lineal para mostrar todos
-                        dtick = 1,           # Intervalo de 1 en 1
-                        side="top"
-                    ),
-                    yaxis = dict(
-                        tickmode = 'linear',
-                        dtick = 1
-                    )
+                    xaxis = dict(tickmode='linear', dtick=1, side="top"),
+                    yaxis = dict(tickmode='linear', dtick=1)
                 )
                 fig_j.update_xaxes(tickfont=dict(size=14))
                 fig_j.update_yaxes(tickfont=dict(size=14))
