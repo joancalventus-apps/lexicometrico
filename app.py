@@ -15,8 +15,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.cluster import KMeans
 from scipy.stats import chi2_contingency, norm
 import spacy
-import subprocess
-import sys
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Lexicométrico", layout="wide")
@@ -26,10 +24,12 @@ st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 1.1rem; font-weight: 600;
+        font-size: 1.1rem;
+        font-weight: 600;
     }
     .stDataFrame {font-size: 1.0rem;}
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -37,31 +37,32 @@ st.markdown("""
 if 'selected_word' not in st.session_state:
     st.session_state['selected_word'] = None
 
-# --- 3. CONFIGURACIÓN GLOBAL Y MODELOS ---
+# --- 3. CONFIGURACIÓN GLOBAL ---
 LANG_MAP = {'Español': 'spanish', 'Inglés': 'english'}
 
 @st.cache_resource
 def download_nltk_resources():
     resources = ['punkt', 'punkt_tab', 'stopwords']
     for res in resources:
-        try: nltk.data.find(f'tokenizers/{res}')
-        except LookupError: nltk.download(res)
+        try:
+            nltk.data.find(f'tokenizers/{res}')
+        except LookupError:
+            nltk.download(res)
         except ValueError:
             try: nltk.data.find(f'corpora/{res}')
             except LookupError: nltk.download(res)
 download_nltk_resources()
 
-# --- SOLUCIÓN ROBUSTA PARA SPACY EN CLOUD ---
+# --- CARGA SIMPLE DE SPACY (Ya instalado por requirements.txt) ---
 @st.cache_resource
 def load_spacy_model():
-    model_name = "es_core_news_sm"
+    # Ya no intentamos descargar aquí, confiamos en requirements.txt
     try:
-        nlp = spacy.load(model_name)
+        nlp = spacy.load("es_core_news_sm")
     except OSError:
-        # Si falla, usamos subprocess para forzar la descarga en el sistema
-        print(f"Descargando modelo {model_name}...")
-        subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name])
-        nlp = spacy.load(model_name)
+        # Fallback silencioso a inglés si fallara la instalación (para no romper la app)
+        st.warning("Modelo español no encontrado. Usando tokenización simple.")
+        return None
     return nlp
 
 # --- 4. FUNCIONES ---
@@ -71,16 +72,23 @@ def clean_text(text, language='Español', custom_stops=[], min_len=2, apply_lemm
     stop_words = set(stopwords.words(lang_code))
     stop_words.update(set(custom_stops))
     
-    # Lógica de lematización optimizada
+    tokens = []
+    
+    # Lógica de lematización
     if apply_lemma and language == 'Español':
         nlp = load_spacy_model()
-        nlp.max_length = 2000000 
-        doc = nlp(str(text).lower())
-        # Filtramos stopwords ANTES de devolver el lema para ahorrar memoria
-        tokens = [token.lemma_ for token in doc if token.is_alpha and len(token.lemma_) >= min_len and token.lemma_ not in stop_words]
+        if nlp:
+            nlp.max_length = 2000000 
+            doc = nlp(str(text).lower())
+            tokens = [token.lemma_ for token in doc if token.is_alpha and token.lemma_ not in stop_words and len(token.lemma_) >= min_len]
+        else:
+            # Fallback si nlp es None
+            tokens = word_tokenize(str(text).lower())
+            tokens = [word for word in tokens if word.isalpha() and word not in stop_words and len(word) >= min_len]
     else:
         tokens = word_tokenize(str(text).lower())
         tokens = [word for word in tokens if word.isalpha() and word not in stop_words and len(word) >= min_len]
+    
     return tokens
 
 def get_significance_stars(p_value):
@@ -126,8 +134,7 @@ lang_opt = st.sidebar.selectbox("Idioma del texto", ["Español", "Inglés"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Procesamiento")
-# Advertencia visual para el usuario
-use_lemmatization = st.sidebar.checkbox("Aplicar Lematización", help="Agrupa variantes. La primera vez puede tardar unos 30 seg.")
+use_lemmatization = st.sidebar.checkbox("Aplicar Lematización", help="Agrupa variantes (ej: políticos, política -> político)")
 
 st.sidebar.header("3. Filtros")
 min_freq_filter = st.sidebar.slider("Seleccione Frecuencia mínima de aparición:", 1, 50, 2)
@@ -140,12 +147,10 @@ if uploaded_file is not None:
         text_col = df.columns[-1]
         cat_cols = df.columns[:-1].tolist()
 
-        # Mensaje de estado dinámico
-        msg_process = 'Procesando corpus textual...'
-        if use_lemmatization:
-            msg_process = 'Descargando modelo y lematizando (esto puede tardar un poco)...'
-
-        with st.spinner(msg_process):
+        msg = 'Procesando corpus textual...'
+        if use_lemmatization: msg += ' (Lematizando...)'
+        
+        with st.spinner(msg):
             df['tokens'] = df[text_col].apply(lambda x: clean_text(x, lang_opt, custom_stopwords_list, 2, use_lemmatization))
             all_tokens_raw = [t for sub in df['tokens'] for t in sub]
             freq_raw = Counter(all_tokens_raw)
@@ -207,16 +212,16 @@ if uploaded_file is not None:
                     ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
                     plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
                     st.pyplot(fig_wc)
+                
                 st.markdown("---"); st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 c_s, c_i = st.columns([1,3])
                 with c_s: m_search = st.text_input("🔍 Buscar palabra:", value="")
                 cur_w = m_search if m_search else st.session_state['selected_word']
                 st.markdown(f"<div style='background-color:#f0f2f6; padding:15px; border-radius:10px; border-left: 6px solid #e74c3c;'><h4 style='margin:0; color:#2c3e50;'>Contextos para: <span style='color:#c0392b; font-size:1.3em;'>{cur_w}</span></h4></div>", unsafe_allow_html=True)
                 if cur_w:
-                    # Búsqueda robusta en el texto original para mostrar la frase tal cual
                     mask = df[text_col].str.contains(cur_w, case=False, na=False)
                     if len(df[mask]) > 0: st.dataframe(df[mask][[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
-                    else: st.warning(f"No se encontraron coincidencias directas (si usó lematización, busque por la raíz).")
+                    else: st.warning(f"No se encontraron coincidencias directas.")
 
             # 2. MAPA CALOR
             with tab2:
@@ -281,15 +286,14 @@ if uploaded_file is not None:
                     edges_del = [(u,v) for u,v,d in G.edges(data=True) if d['weight'] < 2]
                     G.remove_edges_from(edges_del); G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    # Normalización Min-Max (Corregida)
+                    # Normalización Min-Max corregida
                     node_freqs_values = [freq_dist.get(node, 1) for node in G.nodes()]
                     if node_freqs_values:
                         min_f, max_f = min(node_freqs_values), max(node_freqs_values)
-                        # Si todas las frecuencias son iguales o muy cercanas, evitamos división por cero
                         if max_f > min_f:
                             node_sizes = [300 + ((f - min_f) / (max_f - min_f) * 2200) for f in node_freqs_values]
                         else:
-                            node_sizes = [1000 for _ in node_freqs_values] # Tamaño estático si no hay varianza
+                            node_sizes = [1000 for _ in node_freqs_values]
                     else: node_sizes = []
 
                     fig_net, ax_net = plt.subplots(figsize=(7, 5))
