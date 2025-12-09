@@ -97,20 +97,29 @@ def calculate_mtld(tokens, threshold=0.72):
     if not tokens: return 0
     return len(tokens) / ((count_factors(tokens) + count_factors(tokens[::-1])) / 2)
 
-# Función SVD para Análisis de Correspondencia (Activas)
+# Función matemática para Análisis de Correspondencia Simple (SVD)
 def simple_correspondence_analysis(contingency_table):
     X = contingency_table.values
+    # Evitar división por cero si hay filas/cols vacías
+    X = X[~np.all(X == 0, axis=1)]
+    X = X[:, ~np.all(X == 0, axis=0)]
+    
     N = np.sum(X)
     P = X / N
     r = np.sum(P, axis=1)
     c = np.sum(P, axis=0)
+    
     Dr_inv_sqrt = np.diag(1 / np.sqrt(r))
     Dc_inv_sqrt = np.diag(1 / np.sqrt(c))
+    
     expected = np.outer(r, c)
     Z = (P - expected) / np.sqrt(expected)
+    
     U, s, Vt = np.linalg.svd(Z, full_matrices=False)
+    
     row_coords = Dr_inv_sqrt @ U[:, :2] @ np.diag(s[:2])
     col_coords = Dc_inv_sqrt @ Vt.T[:, :2] @ np.diag(s[:2])
+    
     return row_coords, col_coords, s
 
 # --- 5. INTERFAZ ---
@@ -173,14 +182,10 @@ if uploaded_file is not None:
             word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
             def color_func(word, **kwargs): return word_color_map.get(word, '#888888')
 
-            # --- ESTRUCTURA DE PESTAÑAS ---
+            # --- PESTAÑAS ---
             tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                "📊 Frecuencia & KWIC", 
-                "🔥 Mapa calor", 
-                "🤝 Similitud vocabularios", 
-                "🕸️ Red co-ocurrencias", 
-                "🗺️ An. correspondencias", 
-                "❤️ An. sentimientos"
+                "📊 Frecuencia & KWIC", "🔥 Mapa calor", "🤝 Similitud vocabularios", 
+                "🕸️ Red co-ocurrencias", "🗺️ An. correspondencias", "❤️ An. sentimientos"
             ])
 
             # 1. FRECUENCIA
@@ -201,7 +206,6 @@ if uploaded_file is not None:
                     ax.imshow(wc, interpolation='bilinear'); ax.axis('off')
                     plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
                     st.pyplot(fig_wc)
-                
                 st.markdown("---"); st.markdown("### 📝 Análisis de Contexto (KWIC)")
                 c_s, c_i = st.columns([1,3])
                 with c_s: m_search = st.text_input("🔍 Buscar palabra:", value="")
@@ -217,7 +221,6 @@ if uploaded_file is not None:
                 cat_heat = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
                 st.markdown(f"### {cat_heat} vs Vocabulario")
                 with st.info("Guía: Residuos positivos (rojo) = sobre-uso; negativos = infra-uso. *** = Alta significancia."): pass
-                
                 df_exp = df.explode('tokens')
                 df_heat = df_exp[df_exp['tokens'].isin(df_freq['Término'].head(20))]
                 if not df_heat.empty:
@@ -228,7 +231,6 @@ if uploaded_file is not None:
                     fig_h.update_layout(height=500, yaxis_title=cat_heat)
                     fig_h.update_xaxes(side="top", tickfont=dict(size=14)); fig_h.update_yaxes(tickfont=dict(size=14), tickmode='linear', dtick=1)
                     st.plotly_chart(fig_h, use_container_width=True)
-                    
                     st.subheader("2. Tabla de Estadísticos y Significación")
                     chi2, p, dof, ex = chi2_contingency(obs)
                     res = (obs - ex) / np.sqrt(ex)
@@ -240,7 +242,7 @@ if uploaded_file is not None:
                     st.dataframe(pd.DataFrame(stats), use_container_width=False, height=400, width=800, hide_index=True)
                 else: st.warning("Datos insuficientes.")
 
-            # 3. SIMILITUD VOCABULARIOS
+            # 3. SIMILITUD
             with tab3:
                 cat_v = st.selectbox("Comparar grupos de la variable:", cat_cols, key='voc')
                 st.subheader("1. Matriz de Similitud (Jaccard)")
@@ -255,7 +257,6 @@ if uploaded_file is not None:
                 fig_j = px.imshow(jac, x=g_list, y=g_list, text_auto='.2f', color_continuous_scale='Blues', range_color=[0,1], title=f"Jaccard: {cat_v}")
                 fig_j.update_layout(height=500, xaxis=dict(tickmode='linear', dtick=1, side="top"), yaxis=dict(tickmode='linear', dtick=1))
                 st.plotly_chart(fig_j, use_container_width=True)
-                
                 st.markdown("---"); st.subheader("2. Métricas de Diversidad Léxica")
                 with st.info("MTLD: Medida robusta de riqueza léxica (indep. longitud). Valores altos = Mayor riqueza."): pass
                 div_d = []
@@ -266,7 +267,7 @@ if uploaded_file is not None:
                 with c_d1: st.dataframe(pd.DataFrame(div_d), use_container_width=True, hide_index=True)
                 with c_d2: st.plotly_chart(px.bar(div_d, x='Categoría', y=['MTLD', 'TTR'], barmode='group'), use_container_width=True)
 
-            # 4. RED CO-OCURRENCIAS
+            # 4. REDES
             with tab4:
                 st.subheader("Red de co-ocurrencias")
                 st.markdown("**Interpretación:** Nodos = Palabras (Tamaño proporcional a frecuencia). Líneas = Co-ocurrencia.")
@@ -277,13 +278,11 @@ if uploaded_file is not None:
                     G = nx.from_pandas_adjacency(pd.DataFrame(adj.toarray(), index=vec.get_feature_names_out(), columns=vec.get_feature_names_out()))
                     edges_del = [(u,v) for u,v,d in G.edges(data=True) if d['weight'] < 2]
                     G.remove_edges_from(edges_del); G.remove_nodes_from(list(nx.isolates(G)))
-                    
                     node_freqs_values = [freq_dist.get(node, 1) for node in G.nodes()]
                     if node_freqs_values:
                         min_f, max_f = min(node_freqs_values), max(node_freqs_values)
                         node_sizes = [300 + ((f - min_f) / (max_f - min_f) * 2200) if max_f > min_f else 1000 for f in node_freqs_values]
                     else: node_sizes = []
-
                     fig_net, ax_net = plt.subplots(figsize=(7, 5))
                     pos = nx.spring_layout(G, k=0.6, seed=42)
                     nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color='#aaddff', alpha=0.9, ax=ax_net)
@@ -292,107 +291,129 @@ if uploaded_file is not None:
                     ax_net.axis('off'); st.pyplot(fig_net)
                 except Exception as e: st.warning(f"Datos insuficientes: {e}")
 
-            # 5. AN. CORRESPONDENCIAS
+            # 5. AN. CORRESPONDENCIAS (MODIFICADO: SELECCIÓN DE MODO)
             with tab5:
                 st.subheader("Análisis de Correspondencias Simple (ACS)")
-                st.info("Este mapa perceptual muestra la asociación entre categorías (Activas e Ilustrativas) y palabras.")
+                st.info("Mapa perceptual: La cercanía entre puntos indica asociación fuerte.")
                 
-                c1_ac, c2_ac = st.columns(2)
-                with c1_ac:
-                    # VARIABLES ACTIVAS
-                    cat_active = st.multiselect("Variables Activas (Definen ejes):", cat_cols, key='ca_active')
-                with c2_ac:
-                    # VARIABLES ILUSTRATIVAS (OPCIONALES)
-                    # Filtramos para no repetir las activas
-                    available_ill = [c for c in cat_cols if c not in cat_active]
-                    cat_illus = st.multiselect("Variables Ilustrativas (Se proyectan):", available_ill, key='ca_illus')
-
-                if cat_active:
-                    # 1. PREPARACIÓN DE DATOS (ACTIVAS)
-                    # Crear grupo combinado de activas
-                    df['active_group'] = df[cat_active].apply(lambda x: '_'.join(x.astype(str)), axis=1)
+                # --- SELECTOR DE MODO ---
+                ac_mode = st.radio("Seleccione Tipo de Análisis:", 
+                                   ["🔀 Cruce de Variables (Variables Activas)", 
+                                    "📄 Discurso Puro (Lexical CA - Documentos como base)"])
+                
+                cat_illus = []
+                
+                if ac_mode == "🔀 Cruce de Variables (Variables Activas)":
+                    cat_active = st.multiselect("Variables Activas (Definen ejes):", cat_cols, key='ca_act')
+                    avail_ill = [c for c in cat_cols if c not in cat_active]
+                    cat_illus = st.multiselect("Variables Ilustrativas (Se proyectan):", avail_ill, key='ca_ill_1')
                     
-                    df_exp = df.explode('tokens')
-                    top_30_words = df_freq['Término'].head(30).tolist()
-                    df_ca = df_exp[df_exp['tokens'].isin(top_30_words)]
-                    
-                    if not df_ca.empty:
-                        # Tabla de contingencia ACTIVAS
-                        cont_table = pd.crosstab(df_ca['active_group'], df_ca['tokens'])
+                    if cat_active:
+                        df['active_group'] = df[cat_active].apply(lambda x: '_'.join(x.astype(str)), axis=1)
+                        # Matriz: Categoría_Combinada x Palabras
+                        df_exp = df.explode('tokens')
+                        top_30 = df_freq['Término'].head(30).tolist()
+                        df_ca = df_exp[df_exp['tokens'].isin(top_30)]
                         
-                        if cont_table.shape[0] > 1 and cont_table.shape[1] > 1:
-                            # CÁLCULO SVD (AC)
-                            row_coords, col_coords, singular_values = simple_correspondence_analysis(cont_table)
-                            
-                            # Inercia
-                            inertia = singular_values**2
-                            explained_variance = inertia / np.sum(inertia)
-                            d1_expl, d2_expl = explained_variance[0]*100, explained_variance[1]*100
-                            
-                            fig_ca = go.Figure()
-                            
-                            # 2. PLOT CATEGORÍAS ACTIVAS (ROJO)
-                            fig_ca.add_trace(go.Scatter(
-                                x=row_coords[:,0], y=row_coords[:,1],
-                                mode='markers+text',
-                                text=cont_table.index, textposition="top center",
-                                marker=dict(size=12, color='red', symbol='square'),
-                                name="Activas"
-                            ))
-                            
-                            # 3. PLOT PALABRAS (AZUL)
-                            fig_ca.add_trace(go.Scatter(
-                                x=col_coords[:,0], y=col_coords[:,1],
-                                mode='markers+text',
-                                text=cont_table.columns, textposition="bottom center",
-                                marker=dict(size=8, color='blue', opacity=0.6),
-                                name="Palabras"
-                            ))
-                            
-                            # 4. CÁLCULO Y PLOT ILUSTRATIVAS (VERDE)
-                            if cat_illus:
-                                for ill_var in cat_illus:
-                                    # Tabla contingencia ilustrativa
-                                    cont_ill = pd.crosstab(df_ca[ill_var], df_ca['tokens'])
-                                    # Alinear columnas con la tabla activa (mismas palabras)
-                                    cont_ill = cont_ill.reindex(columns=cont_table.columns, fill_value=0)
-                                    
-                                    # Proyección Baricéntrica: 
-                                    # Coord_Sup = (Freq_Sup_Word * Coord_Word) / Total_Freq_Sup
-                                    ill_row_sums = cont_ill.sum(axis=1)
-                                    # Evitar división por cero
-                                    valid_rows = ill_row_sums > 0
-                                    
-                                    if valid_rows.any():
-                                        # Producto matricial: (Categorías_Ilustrativas x Palabras) @ (Palabras x Coordenadas)
-                                        ill_coords = np.dot(cont_ill.loc[valid_rows].values, col_coords[:, :2])
-                                        # Normalizar por peso de fila
-                                        ill_coords = ill_coords / ill_row_sums.loc[valid_rows].values[:, None]
-                                        
-                                        fig_ca.add_trace(go.Scatter(
-                                            x=ill_coords[:,0], y=ill_coords[:,1],
-                                            mode='markers+text',
-                                            text=cont_ill.loc[valid_rows].index,
-                                            textposition="top center",
-                                            marker=dict(size=10, color='green', symbol='diamond'),
-                                            name=f"Ilustrativa: {ill_var}"
-                                        ))
+                        if not df_ca.empty:
+                            cont_table = pd.crosstab(df_ca['active_group'], df_ca['tokens'])
+                        else:
+                            cont_table = pd.DataFrame()
+                    else:
+                        st.info("👆 Seleccione variables activas."); cont_table = pd.DataFrame()
 
-                            fig_ca.update_layout(
-                                title=f"Mapa Perceptual (Dim 1: {d1_expl:.1f}% + Dim 2: {d2_expl:.1f}%)",
-                                xaxis_title="Dimensión 1", yaxis_title="Dimensión 2",
-                                height=650, template="plotly_white"
-                            )
-                            fig_ca.add_vline(x=0, line_width=1, line_dash="dash", line_color="gray")
-                            fig_ca.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
-                            
-                            st.plotly_chart(fig_ca, use_container_width=True)
-                        else: st.warning("Tabla de contingencia muy pequeña.")
-                    else: st.warning("Datos insuficientes.")
-                else:
-                    st.info("👆 Seleccione al menos una Variable Activa para generar el mapa.")
+                else: # MODO DISCURSO PURO (LEXICAL CA)
+                    st.markdown("**Análisis Léxico:** Los ejes se construyen a partir de los documentos individuales.")
+                    cat_illus = st.multiselect("Variables Ilustrativas (Proyectar categorías):", cat_cols, key='ca_ill_2')
+                    
+                    # Matriz: Documentos (Filas originales) x Palabras
+                    # Usamos CountVectorizer sobre TODO el corpus (limitado a top palabras para rendimiento visual)
+                    # Para simplificar la visualización y matemática en vivo, usamos el top 30-40 palabras
+                    vec_ca = CountVectorizer(max_features=30, stop_words=stopwords.words(LANG_MAP.get(lang_opt, 'spanish')))
+                    X_docs = vec_ca.fit_transform(df['str_processed'])
+                    # Convertimos a DataFrame denso para nuestra función SVD
+                    cont_table = pd.DataFrame(X_docs.toarray(), index=df.index, columns=vec_ca.get_feature_names_out())
+                    # Filtramos filas vacías (docs sin las palabras top)
+                    cont_table = cont_table.loc[(cont_table!=0).any(axis=1)]
 
-            # 6. AN. SENTIMIENTOS
+                # --- CÁLCULO Y GRÁFICO COMÚN ---
+                if not cont_table.empty and cont_table.shape[0] > 1 and cont_table.shape[1] > 1:
+                    row_coords, col_coords, s_vals = simple_correspondence_analysis(cont_table)
+                    inertia = s_vals**2
+                    expl = inertia / np.sum(inertia)
+                    d1, d2 = expl[0]*100, expl[1]*100
+                    
+                    fig_ca = go.Figure()
+                    
+                    # 1. PUNTOS ACTIVOS (Depende del modo)
+                    if ac_mode.startswith("🔀"):
+                        # Modo variables: Mostramos las categorías activas en Rojo
+                        fig_ca.add_trace(go.Scatter(
+                            x=row_coords[:,0], y=row_coords[:,1], mode='markers+text',
+                            text=cont_table.index, textposition="top center",
+                            marker=dict(size=12, color='red', symbol='square'), name="Activas"
+                        ))
+                    else:
+                        # Modo Léxico: NO mostramos los documentos individuales (son ruido)
+                        # Solo calculamos el espacio.
+                        pass 
+
+                    # 2. PALABRAS (Azul)
+                    fig_ca.add_trace(go.Scatter(
+                        x=col_coords[:,0], y=col_coords[:,1], mode='markers+text',
+                        text=cont_table.columns, textposition="bottom center",
+                        marker=dict(size=8, color='blue', opacity=0.6), name="Palabras"
+                    ))
+                    
+                    # 3. ILUSTRATIVAS (Verde)
+                    if cat_illus:
+                        for ill_var in cat_illus:
+                            # Para proyectar ilustrativas, necesitamos saber qué filas de cont_table pertenecen a qué categoría
+                            # En modo 'Cruce', cont_table index son grupos. En modo 'Léxico', index son índices originales.
+                            
+                            # Recuperamos la data original alineada con la tabla de contingencia
+                            subset_df = df.loc[cont_table.index]
+                            
+                            # Calculamos centroides
+                            ill_coords_list = []
+                            ill_names = []
+                            
+                            for cat_val in subset_df[ill_var].unique():
+                                # Indices de este grupo
+                                idx_group = subset_df[subset_df[ill_var] == cat_val].index
+                                # En modo Cruce, el index ya es el grupo, esto es más complejo.
+                                # SIMPLIFICACIÓN ROBUSTA: Proyección sobre columnas (Palabras)
+                                # Coord_Sup = Promedio ponderado de las coordenadas de las palabras que usa el grupo
+                                
+                                # Obtenemos el perfil de palabras de este grupo ilustrativo
+                                if ac_mode.startswith("🔀"):
+                                    # Difícil mapear atrás. Usamos lógica de perfil promedio.
+                                    pass 
+                                else:
+                                    # Modo Léxico: Es fácil. Promediamos las coordenadas de las filas (docs) de este grupo
+                                    # row_coords tiene el mismo orden que cont_table
+                                    # Buscamos las posiciones numéricas
+                                    numeric_indices = [cont_table.index.get_loc(i) for i in idx_group if i in cont_table.index]
+                                    if numeric_indices:
+                                        group_centroid = np.mean(row_coords[numeric_indices], axis=0)
+                                        ill_coords_list.append(group_centroid)
+                                        ill_names.append(f"{ill_var}:{cat_val}")
+
+                            if ill_coords_list:
+                                ill_arr = np.array(ill_coords_list)
+                                fig_ca.add_trace(go.Scatter(
+                                    x=ill_arr[:,0], y=ill_arr[:,1], mode='markers+text',
+                                    text=ill_names, textposition="top center",
+                                    marker=dict(size=10, color='green', symbol='diamond'),
+                                    name=f"Ilustrativa: {ill_var}"
+                                ))
+
+                    fig_ca.update_layout(title=f"Mapa Perceptual (Dim 1: {d1:.1f}% + Dim 2: {d2:.1f}%)", xaxis_title="Dim 1", yaxis_title="Dim 2", height=600, template="plotly_white")
+                    fig_ca.add_vline(x=0, line_width=1, line_dash="dash", line_color="gray")
+                    fig_ca.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
+                    st.plotly_chart(fig_ca, use_container_width=True)
+
+            # 6. SENTIMIENTOS
             with tab6:
                 c1, c2 = st.columns(2)
                 with c1: st.plotly_chart(px.histogram(df, x='polaridad', nbins=20, title="Distribución Polaridad", color_discrete_sequence=['teal']), use_container_width=True)
