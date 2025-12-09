@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+import plotly.graph_objects as go
 import networkx as nx
 from textblob import TextBlob
 from wordcloud import WordCloud
@@ -22,11 +23,16 @@ st.set_page_config(page_title="Lexicométrico", layout="wide")
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
+    
+    /* ETIQUETAS PESTAÑAS (Ajustado: un puntito menos) */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 1.3rem; font-weight: 600;
+        font-size: 1.1rem; /* Reducido de 1.3rem a 1.1rem */
+        font-weight: 600;
     }
+    
     .stDataFrame {font-size: 1.0rem;}
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -94,6 +100,45 @@ def calculate_mtld(tokens, threshold=0.72):
     if not tokens: return 0
     return len(tokens) / ((count_factors(tokens) + count_factors(tokens[::-1])) / 2)
 
+# Función matemática para Análisis de Correspondencia Simple (SVD)
+def simple_correspondence_analysis(contingency_table):
+    # Matriz de frecuencias
+    X = contingency_table.values
+    rows, cols = X.shape
+    
+    # Masa total
+    N = np.sum(X)
+    
+    # Matriz de correspondencia
+    P = X / N
+    
+    # Masas de filas y columnas
+    r = np.sum(P, axis=1)
+    c = np.sum(P, axis=0)
+    
+    # Diagonales inversas
+    Dr_inv_sqrt = np.diag(1 / np.sqrt(r))
+    Dc_inv_sqrt = np.diag(1 / np.sqrt(c))
+    
+    # Matriz de residuos estandarizados
+    # S = (P - r * c') / sqrt(r * c')
+    # Equivalent to calculating SVD on deviation matrix
+    
+    # Cálculo manual optimizado para SVD
+    expected = np.outer(r, c)
+    Z = (P - expected) / np.sqrt(expected)
+    
+    # SVD
+    U, s, Vt = np.linalg.svd(Z, full_matrices=False)
+    
+    # Coordenadas principales (2 dimensiones)
+    # Filas (Categorías)
+    row_coords = Dr_inv_sqrt @ U[:, :2] @ np.diag(s[:2])
+    # Columnas (Palabras)
+    col_coords = Dc_inv_sqrt @ Vt.T[:, :2] @ np.diag(s[:2])
+    
+    return row_coords, col_coords, s
+
 # --- 5. INTERFAZ ---
 st.title("📊 Lexicométrico")
 
@@ -154,10 +199,17 @@ if uploaded_file is not None:
             word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
             def color_func(word, **kwargs): return word_color_map.get(word, '#888888')
 
-            # --- PESTAÑAS ---
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Frecuencia & KWIC", "🔥 Mapa de calor", "🤝 Similitud entre vocabularios", "Red de co-ocurrencias", "❤️ Sentimientos"])
+            # --- ESTRUCTURA DE PESTAÑAS (ACTUALIZADA) ---
+            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+                "Frecuencia & KWIC", 
+                "Mapa calor", 
+                "Similitud vocabularios", 
+                "Red co-ocurrencias", 
+                "An. correspondencias", 
+                "An. sentimientos"
+            ])
 
-            # 1. FRECUENCIA
+            # 1. FRECUENCIA & KWIC
             with tab1:
                 c1, c2 = st.columns([1.2, 0.8])
                 with c1:
@@ -186,7 +238,7 @@ if uploaded_file is not None:
                     if len(df[mask]) > 0: st.dataframe(df[mask][[cat_cols[0], text_col]], use_container_width=True, hide_index=True)
                     else: st.warning(f"No se encontraron coincidencias directas.")
 
-            # 2. MAPA DE CALOR
+            # 2. MAPA CALOR
             with tab2:
                 cat_heat = st.selectbox("Seleccione la Variable Categórica (Filas):", cat_cols)
                 st.markdown(f"### {cat_heat} vs Vocabulario")
@@ -214,10 +266,10 @@ if uploaded_file is not None:
                     st.dataframe(pd.DataFrame(stats), use_container_width=False, height=400, width=800, hide_index=True)
                 else: st.warning("Datos insuficientes.")
 
-            # 3. SIMILITUD
+            # 3. SIMILITUD VOCABULARIOS
             with tab3:
                 cat_v = st.selectbox("Comparar grupos de la variable:", cat_cols, key='voc')
-                st.subheader("1. Matriz de Similitud (Jaccard)"); st.markdown("0.0 = Distintos, 1.0 = Idénticos.")
+                st.subheader("1. Matriz de Similitud (Jaccard)")
                 grp = df.groupby(cat_v)['tokens'].apply(list)
                 g_vocab = {k: set([i for s in v for i in s]) for k, v in grp.items()}
                 g_list = sorted(list(g_vocab.keys())); sz = len(g_list)
@@ -240,56 +292,104 @@ if uploaded_file is not None:
                 with c_d1: st.dataframe(pd.DataFrame(div_d), use_container_width=True, hide_index=True)
                 with c_d2: st.plotly_chart(px.bar(div_d, x='Categoría', y=['MTLD', 'TTR'], barmode='group'), use_container_width=True)
 
-            # 4. REDES
+            # 4. RED CO-OCURRENCIAS
             with tab4:
                 st.subheader("Red de co-ocurrencias")
-                st.markdown("""
-                **Interpretación:**
-                * **Círculo (Nodo):** Palabra. El tamaño es proporcional a su frecuencia de uso (más grande = más frecuente).
-                * **Línea:** Conexión entre palabras que aparecen juntas frecuentemente.
-                """)
-                lang_code_net = LANG_MAP.get(lang_opt, 'spanish')
-                vectorizer_net = CountVectorizer(max_features=40, stop_words=stopwords.words(lang_code_net))
+                st.markdown("**Interpretación:** Nodos = Palabras (Tamaño proporcional a frecuencia). Líneas = Co-ocurrencia.")
+                vec = CountVectorizer(max_features=40, stop_words=stopwords.words(LANG_MAP.get(lang_opt, 'spanish')))
                 try:
-                    X_net = vectorizer_net.fit_transform(df['str_processed'])
-                    adj = (X_net.T * X_net)
-                    adj.setdiag(0)
-                    df_cooc = pd.DataFrame(adj.toarray(), index=vectorizer_net.get_feature_names_out(), columns=vectorizer_net.get_feature_names_out())
-                    G = nx.from_pandas_adjacency(df_cooc)
-                    
+                    Xn = vec.fit_transform(df['str_processed'])
+                    adj = (Xn.T * Xn); adj.setdiag(0)
+                    G = nx.from_pandas_adjacency(pd.DataFrame(adj.toarray(), index=vec.get_feature_names_out(), columns=vec.get_feature_names_out()))
                     edges_del = [(u,v) for u,v,d in G.edges(data=True) if d['weight'] < 2]
-                    G.remove_edges_from(edges_del)
-                    G.remove_nodes_from(list(nx.isolates(G)))
+                    G.remove_edges_from(edges_del); G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    # --- CORRECCIÓN DE TAMAÑO DE NODOS (NORMALIZACIÓN MIN-MAX) ---
-                    # 1. Obtener frecuencias reales de los nodos en el gráfico
+                    # Normalización Min-Max para tamaños
                     node_freqs_values = [freq_dist.get(node, 1) for node in G.nodes()]
-                    
                     if node_freqs_values:
-                        min_freq = min(node_freqs_values)
-                        max_freq = max(node_freqs_values)
-                        
-                        # 2. Escalar: (Valor - Min) / (Max - Min). Si Max == Min, tamaño fijo.
-                        # Rango de tamaño visual: de 300 a 2500
-                        if max_freq > min_freq:
-                            node_sizes = [300 + ((f - min_freq) / (max_freq - min_freq)) * 2200 for f in node_freqs_values]
-                        else:
-                            node_sizes = [1000 for _ in node_freqs_values]
-                    else:
-                        node_sizes = []
+                        min_f, max_f = min(node_freqs_values), max(node_freqs_values)
+                        node_sizes = [300 + ((f - min_f) / (max_f - min_f) * 2200) if max_f > min_f else 1000 for f in node_freqs_values]
+                    else: node_sizes = []
 
                     fig_net, ax_net = plt.subplots(figsize=(7, 5))
                     pos = nx.spring_layout(G, k=0.6, seed=42)
                     nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color='#aaddff', alpha=0.9, ax=ax_net)
                     nx.draw_networkx_edges(G, pos, edge_color='#cccccc', width=1, ax=ax_net)
                     nx.draw_networkx_labels(G, pos, font_size=9, ax=ax_net)
-                    ax_net.axis('off')
-                    st.pyplot(fig_net)
-                except Exception as e:
-                    st.warning(f"Se necesitan más datos para la red: {e}")
+                    ax_net.axis('off'); st.pyplot(fig_net)
+                except Exception as e: st.warning(f"Datos insuficientes: {e}")
 
-            # 5. SENTIMIENTOS
+            # 5. AN. CORRESPONDENCIAS (NUEVO)
             with tab5:
+                st.subheader("Análisis de Correspondencias Simple (ACS)")
+                st.info("Mapa perceptual: La cercanía entre puntos (Categorías rojos y Palabras azules) indica asociación.")
+                
+                cat_ca = st.selectbox("Seleccione Variable para ACS:", cat_cols, key='ca_cat')
+                
+                # Preparamos datos: Categoría vs Top 30 palabras (para no saturar)
+                df_exp = df.explode('tokens')
+                top_30_words = df_freq['Término'].head(30).tolist()
+                df_ca = df_exp[df_exp['tokens'].isin(top_30_words)]
+                
+                if not df_ca.empty:
+                    # Tabla de contingencia
+                    cont_table = pd.crosstab(df_ca[cat_ca], df_ca['tokens'])
+                    
+                    if cont_table.shape[0] > 1 and cont_table.shape[1] > 1:
+                        # Cálculo Matemático (SVD)
+                        row_coords, col_coords, singular_values = simple_correspondence_analysis(cont_table)
+                        
+                        # Inercia explicada (aprox)
+                        inertia = singular_values**2
+                        total_inertia = np.sum(inertia)
+                        explained_variance = inertia / total_inertia
+                        dim1_expl = explained_variance[0] * 100
+                        dim2_expl = explained_variance[1] * 100
+                        
+                        # Graficar Biplot
+                        fig_ca = go.Figure()
+                        
+                        # 1. Puntos de Filas (Categorías) - Rojos
+                        fig_ca.add_trace(go.Scatter(
+                            x=row_coords[:, 0], y=row_coords[:, 1],
+                            mode='markers+text',
+                            text=cont_table.index,
+                            textposition="top center",
+                            marker=dict(size=12, color='red', symbol='square'),
+                            name="Categorías"
+                        ))
+                        
+                        # 2. Puntos de Columnas (Palabras) - Azules
+                        fig_ca.add_trace(go.Scatter(
+                            x=col_coords[:, 0], y=col_coords[:, 1],
+                            mode='markers+text',
+                            text=cont_table.columns,
+                            textposition="bottom center",
+                            marker=dict(size=8, color='blue', opacity=0.7),
+                            name="Palabras"
+                        ))
+                        
+                        fig_ca.update_layout(
+                            title=f"Mapa Perceptual (Dim 1: {dim1_expl:.1f}% + Dim 2: {dim2_expl:.1f}%)",
+                            xaxis_title=f"Dimensión 1 ({dim1_expl:.1f}%)",
+                            yaxis_title=f"Dimensión 2 ({dim2_expl:.1f}%)",
+                            height=600,
+                            showlegend=True,
+                            template="plotly_white"
+                        )
+                        
+                        # Líneas de ejes 0,0
+                        fig_ca.add_vline(x=0, line_width=1, line_dash="dash", line_color="gray")
+                        fig_ca.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
+                        
+                        st.plotly_chart(fig_ca, use_container_width=True)
+                    else:
+                        st.warning("La tabla de contingencia es demasiado pequeña para el análisis.")
+                else:
+                    st.warning("Datos insuficientes con los filtros actuales.")
+
+            # 6. AN. SENTIMIENTOS
+            with tab6:
                 c1, c2 = st.columns(2)
                 with c1: st.plotly_chart(px.histogram(df, x='polaridad', nbins=20, title="Distribución Polaridad", color_discrete_sequence=['teal']), use_container_width=True)
                 with c2: 
