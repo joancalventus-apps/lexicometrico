@@ -24,9 +24,9 @@ st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 5rem;}
     
-    /* ETIQUETAS PESTAÑAS (Ajustado: un puntito menos) */
+    /* ETIQUETAS PESTAÑAS */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 1.1rem; /* Reducido de 1.3rem a 1.1rem */
+        font-size: 1.1rem;
         font-weight: 600;
     }
     
@@ -100,43 +100,20 @@ def calculate_mtld(tokens, threshold=0.72):
     if not tokens: return 0
     return len(tokens) / ((count_factors(tokens) + count_factors(tokens[::-1])) / 2)
 
-# Función matemática para Análisis de Correspondencia Simple (SVD)
+# Función SVD para Análisis de Correspondencia
 def simple_correspondence_analysis(contingency_table):
-    # Matriz de frecuencias
     X = contingency_table.values
-    rows, cols = X.shape
-    
-    # Masa total
     N = np.sum(X)
-    
-    # Matriz de correspondencia
     P = X / N
-    
-    # Masas de filas y columnas
     r = np.sum(P, axis=1)
     c = np.sum(P, axis=0)
-    
-    # Diagonales inversas
     Dr_inv_sqrt = np.diag(1 / np.sqrt(r))
     Dc_inv_sqrt = np.diag(1 / np.sqrt(c))
-    
-    # Matriz de residuos estandarizados
-    # S = (P - r * c') / sqrt(r * c')
-    # Equivalent to calculating SVD on deviation matrix
-    
-    # Cálculo manual optimizado para SVD
     expected = np.outer(r, c)
     Z = (P - expected) / np.sqrt(expected)
-    
-    # SVD
     U, s, Vt = np.linalg.svd(Z, full_matrices=False)
-    
-    # Coordenadas principales (2 dimensiones)
-    # Filas (Categorías)
     row_coords = Dr_inv_sqrt @ U[:, :2] @ np.diag(s[:2])
-    # Columnas (Palabras)
     col_coords = Dc_inv_sqrt @ Vt.T[:, :2] @ np.diag(s[:2])
-    
     return row_coords, col_coords, s
 
 # --- 5. INTERFAZ ---
@@ -199,17 +176,17 @@ if uploaded_file is not None:
             word_color_map = {row['Término']: group_color_map[row['Grupo']] for _, row in df_freq.iterrows()}
             def color_func(word, **kwargs): return word_color_map.get(word, '#888888')
 
-            # --- ESTRUCTURA DE PESTAÑAS (ACTUALIZADA) ---
+            # --- ESTRUCTURA DE PESTAÑAS ---
             tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                "Frecuencia & KWIC", 
-                "Mapa calor", 
-                "Similitud vocabularios", 
-                "Red co-ocurrencias", 
-                "An. correspondencias", 
-                "An. sentimientos"
+                "📊 Frecuencia & KWIC", 
+                "🔥 Mapa calor", 
+                "🤝 Similitud vocabularios", 
+                "🕸️ Red co-ocurrencias", 
+                "🗺️ An. correspondencias", 
+                "❤️ An. sentimientos"
             ])
 
-            # 1. FRECUENCIA & KWIC
+            # 1. FRECUENCIA
             with tab1:
                 c1, c2 = st.columns([1.2, 0.8])
                 with c1:
@@ -304,7 +281,6 @@ if uploaded_file is not None:
                     edges_del = [(u,v) for u,v,d in G.edges(data=True) if d['weight'] < 2]
                     G.remove_edges_from(edges_del); G.remove_nodes_from(list(nx.isolates(G)))
                     
-                    # Normalización Min-Max para tamaños
                     node_freqs_values = [freq_dist.get(node, 1) for node in G.nodes()]
                     if node_freqs_values:
                         min_f, max_f = min(node_freqs_values), max(node_freqs_values)
@@ -319,74 +295,46 @@ if uploaded_file is not None:
                     ax_net.axis('off'); st.pyplot(fig_net)
                 except Exception as e: st.warning(f"Datos insuficientes: {e}")
 
-            # 5. AN. CORRESPONDENCIAS (NUEVO)
+            # 5. AN. CORRESPONDENCIAS
             with tab5:
-                st.subheader("Análisis de Correspondencias Simple (ACS)")
-                st.info("Mapa perceptual: La cercanía entre puntos (Categorías rojos y Palabras azules) indica asociación.")
+                st.subheader("Análisis de Correspondencias (AC)")
+                st.info("Mapa perceptual: La cercanía entre Categorías (Rojo) y Palabras (Azul) indica asociación fuerte.")
                 
-                cat_ca = st.selectbox("Seleccione Variable para ACS:", cat_cols, key='ca_cat')
+                # SELECCIÓN MÚLTIPLE DE VARIABLES
+                cat_ca_list = st.multiselect("Seleccione una o más variables para el cruce:", cat_cols)
                 
-                # Preparamos datos: Categoría vs Top 30 palabras (para no saturar)
-                df_exp = df.explode('tokens')
-                top_30_words = df_freq['Término'].head(30).tolist()
-                df_ca = df_exp[df_exp['tokens'].isin(top_30_words)]
-                
-                if not df_ca.empty:
-                    # Tabla de contingencia
-                    cont_table = pd.crosstab(df_ca[cat_ca], df_ca['tokens'])
+                if cat_ca_list:
+                    # Crear columna de interacción combinada
+                    # Ej: Si elige 'Sexo' y 'Edad', crea 'Hombre_Joven', 'Mujer_Adulto', etc.
+                    df['interaction_group'] = df[cat_ca_list].apply(lambda x: '_'.join(x.astype(str)), axis=1)
                     
-                    if cont_table.shape[0] > 1 and cont_table.shape[1] > 1:
-                        # Cálculo Matemático (SVD)
-                        row_coords, col_coords, singular_values = simple_correspondence_analysis(cont_table)
+                    df_exp = df.explode('tokens')
+                    top_30_words = df_freq['Término'].head(30).tolist()
+                    df_ca = df_exp[df_exp['tokens'].isin(top_30_words)]
+                    
+                    if not df_ca.empty:
+                        # Cruce usando la variable combinada
+                        cont_table = pd.crosstab(df_ca['interaction_group'], df_ca['tokens'])
                         
-                        # Inercia explicada (aprox)
-                        inertia = singular_values**2
-                        total_inertia = np.sum(inertia)
-                        explained_variance = inertia / total_inertia
-                        dim1_expl = explained_variance[0] * 100
-                        dim2_expl = explained_variance[1] * 100
-                        
-                        # Graficar Biplot
-                        fig_ca = go.Figure()
-                        
-                        # 1. Puntos de Filas (Categorías) - Rojos
-                        fig_ca.add_trace(go.Scatter(
-                            x=row_coords[:, 0], y=row_coords[:, 1],
-                            mode='markers+text',
-                            text=cont_table.index,
-                            textposition="top center",
-                            marker=dict(size=12, color='red', symbol='square'),
-                            name="Categorías"
-                        ))
-                        
-                        # 2. Puntos de Columnas (Palabras) - Azules
-                        fig_ca.add_trace(go.Scatter(
-                            x=col_coords[:, 0], y=col_coords[:, 1],
-                            mode='markers+text',
-                            text=cont_table.columns,
-                            textposition="bottom center",
-                            marker=dict(size=8, color='blue', opacity=0.7),
-                            name="Palabras"
-                        ))
-                        
-                        fig_ca.update_layout(
-                            title=f"Mapa Perceptual (Dim 1: {dim1_expl:.1f}% + Dim 2: {dim2_expl:.1f}%)",
-                            xaxis_title=f"Dimensión 1 ({dim1_expl:.1f}%)",
-                            yaxis_title=f"Dimensión 2 ({dim2_expl:.1f}%)",
-                            height=600,
-                            showlegend=True,
-                            template="plotly_white"
-                        )
-                        
-                        # Líneas de ejes 0,0
-                        fig_ca.add_vline(x=0, line_width=1, line_dash="dash", line_color="gray")
-                        fig_ca.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
-                        
-                        st.plotly_chart(fig_ca, use_container_width=True)
-                    else:
-                        st.warning("La tabla de contingencia es demasiado pequeña para el análisis.")
+                        if cont_table.shape[0] > 1 and cont_table.shape[1] > 1:
+                            row_coords, col_coords, s_vals = simple_correspondence_analysis(cont_table)
+                            inertia = s_vals**2
+                            expl = inertia / np.sum(inertia)
+                            d1, d2 = expl[0]*100, expl[1]*100
+                            
+                            fig_ca = go.Figure()
+                            # Puntos Rojos (Categorías/Interacciones)
+                            fig_ca.add_trace(go.Scatter(x=row_coords[:,0], y=row_coords[:,1], mode='markers+text', text=cont_table.index, textposition="top center", marker=dict(size=12, color='red', symbol='square'), name="Grupos"))
+                            # Puntos Azules (Palabras)
+                            fig_ca.add_trace(go.Scatter(x=col_coords[:,0], y=col_coords[:,1], mode='markers+text', text=cont_table.columns, textposition="bottom center", marker=dict(size=8, color='blue', opacity=0.7), name="Palabras"))
+                            
+                            fig_ca.update_layout(title=f"Mapa Perceptual (Dim 1: {d1:.1f}% + Dim 2: {d2:.1f}%)", xaxis_title="Dim 1", yaxis_title="Dim 2", height=600, template="plotly_white")
+                            fig_ca.add_vline(x=0, line_width=1, line_dash="dash", line_color="gray"); fig_ca.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
+                            st.plotly_chart(fig_ca, use_container_width=True)
+                        else: st.warning("Tabla de contingencia muy pequeña.")
+                    else: st.warning("Datos insuficientes.")
                 else:
-                    st.warning("Datos insuficientes con los filtros actuales.")
+                    st.info("👆 Seleccione al menos una variable en el menú de arriba.")
 
             # 6. AN. SENTIMIENTOS
             with tab6:
